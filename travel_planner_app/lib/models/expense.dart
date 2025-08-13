@@ -1,10 +1,26 @@
-class Expense {
-  final String id;
-  final String tripId;
-  final String title;
-  final double amount;
-  final String category;
-  final DateTime date;
+import 'package:hive/hive.dart';
+
+part 'expense.g.dart';
+
+@HiveType(typeId: 0)
+class Expense extends HiveObject {
+  @HiveField(0)
+  String id;
+
+  @HiveField(1)
+  String tripId;
+
+  @HiveField(2)
+  String title;
+
+  @HiveField(3)
+  double amount;
+
+  @HiveField(4)
+  String category;
+
+  @HiveField(5)
+  DateTime date;
 
   Expense({
     required this.id,

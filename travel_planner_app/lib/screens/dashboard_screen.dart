@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import '../models/trip.dart';
 import '../models/expense.dart';
 import 'expense_form_screen.dart';
+import 'package:hive_flutter/hive_flutter.dart';
+import 'package:uuid/uuid.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -20,21 +22,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
     currency: 'EUR',
   );
 
-  final List<Expense> _expenses = [];
+  late List<Expense> _expenses;
+  late Box<Expense> _expensesBox;
 
   void _addExpense(String title, double amount, String category) {
+    final newExpense = Expense(
+      id: const Uuid().v4(),
+      tripId: 't1',
+      title: title,
+      amount: amount,
+      category: category,
+      date: DateTime.now(),
+    );
     setState(() {
-      _expenses.add(
-        Expense(
-          id: DateTime.now().toString(),
-          tripId: 't1',
-          title: title,
-          amount: amount,
-          category: category,
-          date: DateTime.now(),
-        ),
-      );
+      _expenses.add(newExpense);
     });
+    _expensesBox.add(newExpense);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _expensesBox = Hive.box<Expense>('expensesBox');
+    _expenses = _expensesBox.values.toList();
   }
 
   @override
