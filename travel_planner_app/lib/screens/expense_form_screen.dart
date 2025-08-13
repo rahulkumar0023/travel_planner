@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 class ExpenseFormScreen extends StatefulWidget {
   final Function(String, double, String) onAddExpense;
 
-  ExpenseFormScreen({required this.onAddExpense});
+  const ExpenseFormScreen({super.key, required this.onAddExpense});
 
   @override
   State<ExpenseFormScreen> createState() => _ExpenseFormScreenState();
@@ -44,20 +44,14 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
             DropdownButton<String>(
               value: _selectedCategory,
               items: ['Food', 'Transport', 'Lodging', 'Other']
-                  .map((cat) => DropdownMenuItem(
-                        value: cat,
-                        child: Text(cat),
-                      ))
+                  .map((cat) => DropdownMenuItem(value: cat, child: Text(cat)))
                   .toList(),
               onChanged: (val) {
                 if (val != null) setState(() => _selectedCategory = val);
               },
             ),
             SizedBox(height: 20),
-            ElevatedButton(
-              onPressed: _submitForm,
-              child: Text('Save Expense'),
-            ),
+            ElevatedButton(onPressed: _submitForm, child: Text('Save Expense')),
           ],
         ),
       ),
