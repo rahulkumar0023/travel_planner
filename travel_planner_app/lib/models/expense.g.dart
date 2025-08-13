@@ -2,6 +2,10 @@
 
 part of 'expense.dart';
 
+// **************************************************************************
+// TypeAdapterGenerator
+// **************************************************************************
+
 class ExpenseAdapter extends TypeAdapter<Expense> {
   @override
   final int typeId = 0;
@@ -19,13 +23,15 @@ class ExpenseAdapter extends TypeAdapter<Expense> {
       amount: fields[3] as double,
       category: fields[4] as String,
       date: fields[5] as DateTime,
+      paidBy: fields[6] as String,
+      sharedWith: (fields[7] as List).cast<String>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, Expense obj) {
     writer
-      ..writeByte(6)
+      ..writeByte(8)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -37,7 +43,11 @@ class ExpenseAdapter extends TypeAdapter<Expense> {
       ..writeByte(4)
       ..write(obj.category)
       ..writeByte(5)
-      ..write(obj.date);
+      ..write(obj.date)
+      ..writeByte(6)
+      ..write(obj.paidBy)
+      ..writeByte(7)
+      ..write(obj.sharedWith);
   }
 
   @override
