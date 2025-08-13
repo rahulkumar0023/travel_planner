@@ -7,23 +7,15 @@ import '../models/trip.dart';
 import 'expense_form_screen.dart';
 
 class DashboardScreen extends StatefulWidget {
-  const DashboardScreen({super.key});
+  const DashboardScreen({super.key, required this.activeTrip});
+  final Trip activeTrip;
 
   @override
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  // ⛳️ replace with your active trip (later: select from Trip list)
-  final Trip trip = Trip(
-    id: 't1',
-    name: 'Italy Trip',
-    startDate: DateTime(2025, 9, 1),
-    endDate: DateTime(2025, 9, 10),
-    initialBudget: 1500.0,
-    currency: 'EUR',
-    participants: const ['Rahul'],
-  );
+  late Trip trip;
 
   late Box<Expense> _expensesBox;
   List<Expense> _expenses = []; // start empty to avoid first-build nulls
@@ -32,6 +24,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    trip = widget.activeTrip;
     _expensesBox = Hive.box<Expense>('expensesBox');
     // load cached first for instant UI, then try API
     _expenses = _expensesBox.values.toList();
@@ -98,17 +91,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final categories = _categorySummaries(_expenses);
 
     return Scaffold(
-      appBar: AppBar(
-        title: Text(trip.name),
-        centerTitle: true,
-        actions: [
-          IconButton(
-            tooltip: 'Refresh',
-            onPressed: _loadFromApi,
-            icon: const Icon(Icons.sync),
-          ),
-        ],
-      ),
       floatingActionButton: FloatingActionButton.extended(
         onPressed: () {
           Navigator.of(context).push(

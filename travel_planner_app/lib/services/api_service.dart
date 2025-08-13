@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/expense.dart';
 import '../models/trip.dart';
+import '../models/group_balance.dart';
 
 class ApiService {
   static const String baseUrl = 'http://192.168.0.9:8080'; // 👈 Replace this
@@ -58,5 +59,15 @@ class ApiService {
     if (response.statusCode != 200 && response.statusCode != 201) {
       throw Exception('Failed to add trip');
     }
+  }
+
+  static Future<List<GroupBalance>> fetchGroupBalances(String tripId) async {
+    final uri = Uri.parse('$baseUrl/expenses/split/$tripId');
+    final res = await http.get(uri);
+    if (res.statusCode != 200) {
+      throw Exception('Split fetch failed: ${res.statusCode}');
+    }
+    final data = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+    return data.map(GroupBalance.fromJson).toList();
   }
 }
