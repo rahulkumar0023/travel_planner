@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'models/expense.dart';
-import 'screens/dashboard_screen.dart';
+import 'screens/app_shell.dart';
 
 class TravelPlannerApp extends StatelessWidget {
   const TravelPlannerApp({super.key});
@@ -47,7 +47,7 @@ class TravelPlannerApp extends StatelessWidget {
           ),
         ),
       ),
-      home: const DashboardScreen(),
+      home: const AppShell(),
     );
   }
 }
