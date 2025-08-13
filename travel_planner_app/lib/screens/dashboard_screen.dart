@@ -93,7 +93,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     final pct = trip.initialBudget == 0
         ? 0.0
-        : (totalSpent / trip.initialBudget).clamp(0, 1);
+        : (totalSpent / trip.initialBudget).clamp(0, 1).toDouble();
 
     final categories = _categorySummaries(_expenses);
 
@@ -355,7 +355,7 @@ class _AnimatedDonut extends StatelessWidget {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            CircularProgressIndicator(value: 1, strokeWidth: 10, color: bg),
+            CircularProgressIndicator(value: 1.0, strokeWidth: 10, color: bg),
             CircularProgressIndicator(value: value, strokeWidth: 10, color: fg),
             Text(
               '${(value * 100).round()}%',
