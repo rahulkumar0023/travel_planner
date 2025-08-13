@@ -1,10 +1,16 @@
 import 'package:flutter/material.dart';
 import '../models/trip.dart';
 import '../models/expense.dart';
+import 'expense_form_screen.dart';
 
-class DashboardScreen extends StatelessWidget {
-  DashboardScreen({super.key});
+class DashboardScreen extends StatefulWidget {
+  const DashboardScreen({super.key});
 
+  @override
+  State<DashboardScreen> createState() => _DashboardScreenState();
+}
+
+class _DashboardScreenState extends State<DashboardScreen> {
   final Trip trip = Trip(
     id: 't1',
     name: 'Italy Trip',
@@ -14,14 +20,26 @@ class DashboardScreen extends StatelessWidget {
     currency: 'EUR',
   );
 
-  final List<Expense> expenses = [
-    Expense(id: 'e1', tripId: 't1', title: 'Flight', amount: 300, category: 'Transport', date: DateTime.now()),
-    Expense(id: 'e2', tripId: 't1', title: 'Pizza Dinner', amount: 40, category: 'Food', date: DateTime.now()),
-  ];
+  final List<Expense> _expenses = [];
+
+  void _addExpense(String title, double amount, String category) {
+    setState(() {
+      _expenses.add(
+        Expense(
+          id: DateTime.now().toString(),
+          tripId: 't1',
+          title: title,
+          amount: amount,
+          category: category,
+          date: DateTime.now(),
+        ),
+      );
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
-    double totalSpent = expenses.fold(0, (sum, e) => sum + e.amount);
+    double totalSpent = _expenses.fold(0, (sum, e) => sum + e.amount);
     double remaining = trip.initialBudget - totalSpent;
 
     return Scaffold(
@@ -37,9 +55,9 @@ class DashboardScreen extends StatelessWidget {
             const SizedBox(height: 20),
             Expanded(
               child: ListView.builder(
-                itemCount: expenses.length,
+                itemCount: _expenses.length,
                 itemBuilder: (ctx, i) {
-                  final e = expenses[i];
+                  final e = _expenses[i];
                   return ListTile(
                     title: Text(e.title),
                     subtitle: Text('${e.category} • ${e.amount} ${trip.currency}'),
@@ -50,6 +68,16 @@ class DashboardScreen extends StatelessWidget {
             )
           ],
         ),
+      ),
+      floatingActionButton: FloatingActionButton(
+        child: const Icon(Icons.add),
+        onPressed: () {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (_) => ExpenseFormScreen(onAddExpense: _addExpense),
+            ),
+          );
+        },
       ),
     );
   }
