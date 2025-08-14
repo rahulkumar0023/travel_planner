@@ -1,5 +1,33 @@
 import 'package:flutter/material.dart';
 
+class ExpenseFormScreen extends StatelessWidget {
+  final void Function(
+    String title,
+    double amount,
+    String category,
+    String paidBy,
+    List<String> sharedWith,
+  ) onAddExpense;
+
+  const ExpenseFormScreen({super.key, required this.onAddExpense});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add Expense')),
+      body: Padding(
+        padding: const EdgeInsets.all(16),
+        child: ExpenseFormFields(
+          onSubmit: (title, amount, category, paidBy, sharedWith) {
+            onAddExpense(title, amount, category, paidBy, sharedWith);
+            Navigator.of(context).pop();
+          },
+        ),
+      ),
+    );
+  }
+}
+
 class ExpenseFormFields extends StatefulWidget {
   final void Function(
     String title,

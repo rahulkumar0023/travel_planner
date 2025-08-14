@@ -3,7 +3,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/expense.dart';
-import '../models/group_balance.dart';
 import '../models/trip.dart';
 import '../models/budget.dart';
 
@@ -55,14 +54,22 @@ class ApiService {
   }
 
   // ----- balances -----
-  static Future<List<GroupBalance>> fetchGroupBalances(String tripId) async {
-    final res = await http.get(Uri.parse('$baseUrl/balances/$tripId'));
-    if (res.statusCode == 404) return <GroupBalance>[];
-    if (res.statusCode != 200) {
-      throw Exception('Split fetch failed: ${res.statusCode} ${res.body}');
+  static Future<List<Map<String, dynamic>>> fetchGroupBalances(String tripId) async {
+    final url = Uri.parse('$baseUrl/balances/$tripId');
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final List data = jsonDecode(response.body);
+        return data.cast<Map<String, dynamic>>();
+      } else if (response.statusCode == 404) {
+        return [];
+      } else {
+        throw Exception('Failed to load balances: ${response.statusCode}');
+      }
+    } catch (e) {
+      print('Error fetching balances: $e');
+      return [];
     }
-    final data = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
-    return data.map(GroupBalance.fromJson).toList();
   }
 
   // ----- budgets -----
@@ -123,19 +130,26 @@ class ApiService {
   }
 
   // ----- currency -----
-  static Future<double> convert({
-    required double amount,
-    required String from,
-    required String to,
-  }) async {
-    final uri =
-        Uri.parse('$baseUrl/currency/convert?amount=$amount&from=$from&to=$to');
-    final res = await http.get(uri);
-    if (res.statusCode != 200) {
-      throw Exception('Convert failed: ${res.statusCode}');
+  static Future<double> convert(double amount, String fromCurrency, String toCurrency) async {
+    if (amount == 0 || fromCurrency == toCurrency) {
+      return amount;
     }
-    final obj = jsonDecode(res.body) as Map<String, dynamic>;
-    return (obj['amount'] as num).toDouble();
+
+    final url = Uri.parse('$baseUrl/currency/convert?amount=$amount&from=$fromCurrency&to=$toCurrency');
+
+    try {
+      final response = await http.get(url);
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        return (data['convertedAmount'] as num).toDouble();
+      } else {
+        print('Currency conversion failed: ${response.statusCode}');
+        return amount;
+      }
+    } catch (e) {
+      print('Error converting currency: $e');
+      return amount;
+    }
   }
 
   // ----- itinerary -----

@@ -39,6 +39,7 @@ dependencies:
   path_provider: ^2.0.15
   uuid: ^4.0.0
   google_fonts: ^6.2.1
+  shared_preferences: ^2.2.2
   
 
 dev_dependencies:
