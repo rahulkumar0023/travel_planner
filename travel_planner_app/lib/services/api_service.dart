@@ -5,7 +5,7 @@ import '../models/trip.dart';
 import '../models/group_balance.dart';
 
 class ApiService {
-  static const String baseUrl = 'http://192.168.0.9:8080'; // 👈 Replace this
+  static const String baseUrl = 'https://travel-planner-api-uo05.onrender.com';
 
   // Fetch all expenses for a trip
   static Future<List<Expense>> fetchExpenses(String tripId) async {
