@@ -8,7 +8,8 @@ import '../models/budget.dart';
 
 // ⚠️ set this to your Render URL
 class ApiService {
-  static const String baseUrl = 'https://travel-planner-api-uo05.onrender.com';
+  static const String baseUrl =
+      'https://travel-planner-api-uo05.onrender.com'; // 👈 Replace this
 
   // ----- trips -----
   static Future<List<Trip>> fetchTrips() async {
