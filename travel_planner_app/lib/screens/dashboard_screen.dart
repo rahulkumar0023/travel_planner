@@ -20,6 +20,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   late Box<Expense> _expensesBox;
   List<Expense> _expenses = []; // start empty to avoid first-build nulls
   bool _loading = true;
+  double? eurTotal;
 
   @override
   void initState() {
@@ -29,6 +30,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // load cached first for instant UI, then try API
     _expenses = _expensesBox.values.toList();
     _loading = false;
+    _convert();
     _loadFromApi(); // fire-and-forget refresh
   }
 
@@ -38,6 +40,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       setState(() {
         _expenses = remote;
       });
+      _convert();
       // cache latest
       await _replaceBox(remote);
     } catch (e) {
@@ -51,6 +54,19 @@ class _DashboardScreenState extends State<DashboardScreen> {
     for (final e in items) {
       await _expensesBox.add(e);
     }
+  }
+
+  void _convert() async {
+    final total = _expenses.fold<double>(0, (s, e) => s + e.amount);
+    try {
+      final converted = await ApiService.convert(
+        amount: total,
+        from: trip.currency,
+        to: 'EUR',
+      );
+      if (!mounted) return;
+      setState(() => eurTotal = converted);
+    } catch (_) {}
   }
 
   void _addExpense(
@@ -73,6 +89,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     setState(() => _expenses = [..._expenses, expense]);
     _expensesBox.add(expense);
+    _convert();
     // TODO: optionally sync to backend:
     // ApiService.addExpense(expense).catchError((_) { /* mark unsynced */ });
   }
@@ -114,6 +131,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 spent: totalSpent,
                 remaining: remaining,
                 pct: pct,
+                altSpent: eurTotal,
+                altCurrency: 'EUR',
               ),
             ),
             // horizontal categories strip
@@ -206,12 +225,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
 class _HeaderCard extends StatelessWidget {
   final String currency;
   final double budget, spent, remaining, pct;
+  final double? altSpent;
+  final String? altCurrency;
   const _HeaderCard({
     required this.currency,
     required this.budget,
     required this.spent,
     required this.remaining,
     required this.pct,
+    this.altSpent,
+    this.altCurrency,
   });
 
   @override
@@ -278,6 +301,17 @@ class _HeaderCard extends StatelessWidget {
                       ),
                     ],
                   ),
+                  if (altSpent != null && altCurrency != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8),
+                      child: Text(
+                        '≈ ${altSpent!.toStringAsFixed(2)} $altCurrency',
+                        style: TextStyle(
+                          color: cs.onPrimary.withOpacity(.9),
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),
