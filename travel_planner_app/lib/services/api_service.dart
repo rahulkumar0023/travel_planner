@@ -63,15 +63,34 @@ class ApiService {
   }
 
   static Future<List<GroupBalance>> fetchGroupBalances(String tripId) async {
-    final res = await http.get(Uri.parse('$baseUrl/balances/$tripId'));
+    final url =
+        '$baseUrl/balances/$tripId'; // 👈 make sure this path matches your backend
+    final res = await http.get(Uri.parse(url));
     if (res.statusCode == 404) {
-      // Trip not found → show empty UI instead of crashing
-      return <GroupBalance>[];
+      return <GroupBalance>[]; // treat "trip not found" as empty
     }
+
     if (res.statusCode != 200) {
       throw Exception('Split fetch failed: ${res.statusCode} ${res.body}');
     }
     final data = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
     return data.map(GroupBalance.fromJson).toList();
+  }
+
+  // Currency convert (works with your updated backend)
+  static Future<double> convert({
+    required double amount,
+    required String from,
+    required String to,
+  }) async {
+    final uri = Uri.parse(
+      '$baseUrl/currency/convert?amount=$amount&from=$from&to=$to',
+    );
+    final res = await http.get(uri);
+    if (res.statusCode != 200) {
+      throw Exception('Convert failed: ${res.statusCode} ${res.body}');
+    }
+    final obj = jsonDecode(res.body) as Map<String, dynamic>;
+    return (obj['amount'] as num).toDouble();
   }
 }

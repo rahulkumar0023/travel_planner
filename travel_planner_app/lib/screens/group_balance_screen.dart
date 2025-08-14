@@ -17,22 +17,16 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
   @override
   void initState() {
     super.initState();
-    _future = ApiService.fetchGroupBalances(
-      widget.activeTrip.id,
-    ); // no setState here
+    _future = ApiService.fetchGroupBalances(widget.activeTrip.id); // real UUID
   }
 
   Future<void> _refresh() async {
-    final fut = ApiService.fetchGroupBalances(
-      widget.activeTrip.id,
-    ); // do async work OUTSIDE setState
+    final fut = ApiService.fetchGroupBalances(widget.activeTrip.id);
     if (!mounted) return;
-    setState(() {
-      _future = fut;
-    }); // set synchronously
+    setState(() => _future = fut); // sync
     try {
       await fut;
-    } catch (_) {} // await after setState (not inside it)
+    } catch (_) {} // await outside setState
   }
 
   @override
@@ -47,7 +41,6 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            // Show a friendly error with Retry that calls _refresh (NOT wrapped in setState)
             return ListView(
               children: [
                 const SizedBox(height: 100),
@@ -57,8 +50,7 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
                 const SizedBox(height: 8),
                 Center(
                   child: ElevatedButton.icon(
-                    onPressed:
-                        _refresh, // 👈 not inside setState, not async lambda
+                    onPressed: _refresh,
                     icon: const Icon(Icons.refresh),
                     label: const Text('Retry'),
                   ),
@@ -66,7 +58,6 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
               ],
             );
           }
-
           final items = snap.data ?? const <GroupBalance>[];
           if (items.isEmpty) {
             return ListView(
@@ -76,41 +67,22 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
               ],
             );
           }
-
           return ListView.separated(
             padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
             itemCount: items.length,
             separatorBuilder: (_, __) => const SizedBox(height: 12),
             itemBuilder: (context, i) {
               final b = items[i];
-              final amt = b.amount.toStringAsFixed(2);
               return Card(
                 child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: cs.primaryContainer,
-                    child: Icon(Icons.swap_horiz, color: cs.onPrimaryContainer),
-                  ),
+                  leading: const Icon(Icons.swap_horiz),
                   title: Text(
                     '${b.from} → ${b.to}',
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
-                  subtitle: const Text('settlement'),
-                  trailing: Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 10,
-                      vertical: 6,
-                    ),
-                    decoration: BoxDecoration(
-                      color: cs.secondaryContainer,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text(
-                      '$amt ${b.currency}',
-                      style: TextStyle(
-                        color: cs.onSecondaryContainer,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
+                  trailing: Text(
+                    '${b.amount.toStringAsFixed(2)} ${b.currency}',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
                   ),
                 ),
               );
