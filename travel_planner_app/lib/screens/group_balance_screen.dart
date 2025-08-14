@@ -1,109 +1,146 @@
 import 'package:flutter/material.dart';
-import '../models/trip.dart';
-import '../models/group_balance.dart';
 import '../services/api_service.dart';
 
 class GroupBalanceScreen extends StatefulWidget {
-  final Trip activeTrip;
-  const GroupBalanceScreen({super.key, required this.activeTrip});
+  final String tripId;
+
+  const GroupBalanceScreen({super.key, required this.tripId});
 
   @override
   State<GroupBalanceScreen> createState() => _GroupBalanceScreenState();
 }
 
 class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
-  late Future<List<GroupBalance>> _future;
+  List<Map<String, dynamic>> _balances = [];
+  bool _loading = true;
+  String? _error;
 
   @override
   void initState() {
     super.initState();
-    _future = ApiService.fetchGroupBalances(widget.activeTrip.id);
+    _loadBalances();
   }
 
-  Future<void> _refresh() async {
-    final fut = ApiService.fetchGroupBalances(widget.activeTrip.id);
-    if (!mounted) return;
-    setState(() => _future = fut);
-    await fut;
+  Future<void> _loadBalances() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final balances = await ApiService.fetchGroupBalances(widget.tripId);
+      setState(() {
+        _balances = balances;
+        _loading = false;
+      });
+    } catch (e) {
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Group Balances'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            onPressed: _loadBalances,
+          ),
+        ],
+      ),
+      body: _loading
+          ? const Center(child: CircularProgressIndicator())
+          : _error != null
+              ? _buildErrorState()
+              : _balances.isEmpty
+                  ? _buildEmptyState()
+                  : _buildBalancesList(),
+    );
+  }
+
+  Widget _buildErrorState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.error_outline, size: 64, color: Colors.red),
+          const SizedBox(height: 16),
+          const Text('Error loading balances'),
+          Text(_error ?? '', style: const TextStyle(color: Colors.grey)),
+          const SizedBox(height: 16),
+          ElevatedButton(
+            onPressed: _loadBalances,
+            child: const Text('Retry'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.balance, size: 64, color: Colors.grey),
+          const SizedBox(height: 16),
+          Text(
+            'No balances to show',
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          const SizedBox(height: 8),
+          const Text('Add some shared expenses first'),
+          const SizedBox(height: 24),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: const Text('Add Expenses'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBalancesList() {
     return RefreshIndicator(
-      onRefresh: _refresh,
-      child: FutureBuilder<List<GroupBalance>>(
-        future: _future,
-        builder: (context, snap) {
-          if (snap.connectionState == ConnectionState.waiting) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          if (snap.hasError) {
-            return ListView(
-              children: [
-                const SizedBox(height: 100),
-                Icon(Icons.error_outline, size: 48, color: cs.error),
-                const SizedBox(height: 12),
-                const Center(child: Text('Couldn\'t load balances')),
-                const SizedBox(height: 8),
-                Center(
-                  child: Text('${snap.error}',
-                      style: Theme.of(context).textTheme.bodySmall),
-                ),
-                const SizedBox(height: 12),
-                Center(
-                  child: ElevatedButton.icon(
-                    onPressed: _refresh,
-                    icon: const Icon(Icons.refresh),
-                    label: const Text('Retry'),
-                  ),
-                ),
-              ],
-            );
-          }
+      onRefresh: _loadBalances,
+      child: ListView.builder(
+        padding: const EdgeInsets.all(16),
+        itemCount: _balances.length,
+        itemBuilder: (context, index) {
+          final balance = _balances[index];
+          final amount = (balance['amount'] as num).toDouble();
+          final isPositive = amount > 0;
 
-          final items = snap.data ?? [];
-          if (items.isEmpty) {
-            return ListView(
-              children: const [
-                SizedBox(height: 100),
-                Center(child: Text('No balances yet — add some expenses!')),
-              ],
-            );
-          }
-
-          return ListView.separated(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-            itemCount: items.length,
-            separatorBuilder: (_, __) => const SizedBox(height: 12),
-            itemBuilder: (context, i) {
-              final b = items[i];
-              final amt = b.amount.toStringAsFixed(2);
-              return Card(
-                child: ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: cs.primaryContainer,
-                    child: Icon(Icons.swap_horiz,
-                        color: cs.onPrimaryContainer),
-                  ),
-                  title: Text('${b.from} → ${b.to}',
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  subtitle: const Text('settlement'),
-                  trailing: Container(
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    decoration: BoxDecoration(
-                      color: cs.secondaryContainer,
-                      borderRadius: BorderRadius.circular(999),
-                    ),
-                    child: Text('$amt ${b.currency}',
-                        style: TextStyle(
-                            color: cs.onSecondaryContainer,
-                            fontWeight: FontWeight.w800)),
-                  ),
+          return Card(
+            margin: const EdgeInsets.only(bottom: 12),
+            child: ListTile(
+              leading: CircleAvatar(
+                backgroundColor: isPositive ? Colors.green : Colors.red,
+                child: Icon(
+                  isPositive ? Icons.arrow_upward : Icons.arrow_downward,
+                  color: Colors.white,
                 ),
-              );
-            },
+              ),
+              title: Text(
+                isPositive
+                    ? '${balance['owedTo']} owes you'
+                    : 'You owe ${balance['owedBy']}',
+                style: const TextStyle(fontWeight: FontWeight.w500),
+              ),
+              trailing: Text(
+                '€${amount.abs().toStringAsFixed(2)}',
+                style: TextStyle(
+                  color: isPositive ? Colors.green : Colors.red,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
           );
         },
       ),

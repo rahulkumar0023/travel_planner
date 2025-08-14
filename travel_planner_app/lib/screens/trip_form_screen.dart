@@ -1,176 +1,179 @@
 import 'package:flutter/material.dart';
-
 import '../models/trip.dart';
-import '../services/api_service.dart';
 
 class TripFormScreen extends StatefulWidget {
-  const TripFormScreen({super.key});
+  final Function(Trip) onTripCreated;
+
+  const TripFormScreen({super.key, required this.onTripCreated});
+
   @override
   State<TripFormScreen> createState() => _TripFormScreenState();
 }
 
 class _TripFormScreenState extends State<TripFormScreen> {
-  final _form = GlobalKey<FormState>();
-  final _name = TextEditingController();
-  DateTime? _start;
-  DateTime? _end;
-  final _currency = ValueNotifier<String>('EUR');
-  final _participants = <String>[];
-  final _participantCtrl = TextEditingController();
-  bool _submitting = false;
+  final _formKey = GlobalKey<FormState>();
+  final _nameController = TextEditingController();
+  final _budgetController = TextEditingController();
 
-  Future<void> _pickDate(bool isStart) async {
-    final now = DateTime.now();
-    final picked = await showDatePicker(
+  String _selectedCurrency = 'EUR';
+  DateTime _startDate = DateTime.now();
+  DateTime _endDate = DateTime.now().add(const Duration(days: 7));
+
+  final List<String> _currencies = ['EUR', 'USD', 'GBP', 'PLN', 'JPY', 'CAD', 'AUD'];
+
+  Future<void> _selectDate(BuildContext context, bool isStartDate) async {
+    final date = await showDatePicker(
       context: context,
-      initialDate: now,
-      firstDate: DateTime(now.year - 1),
-      lastDate: DateTime(now.year + 3),
+      initialDate: isStartDate ? _startDate : _endDate,
+      firstDate: DateTime.now().subtract(const Duration(days: 365)),
+      lastDate: DateTime.now().add(const Duration(days: 730)),
     );
-    if (picked != null) {
+
+    if (date != null) {
       setState(() {
-        if (isStart) {
-          _start = picked;
+        if (isStartDate) {
+          _startDate = date;
+          if (_endDate.isBefore(_startDate)) {
+            _endDate = _startDate.add(const Duration(days: 1));
+          }
         } else {
-          _end = picked;
+          _endDate = date;
         }
       });
     }
   }
 
-  Future<void> _submit() async {
-    if (!_form.currentState!.validate()) return;
-    if (_start == null || _end == null) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(const SnackBar(content: Text('Pick start and end dates')));
-      return;
-    }
-    setState(() => _submitting = true);
-    try {
-      final created = await ApiService.addTrip(
-        Trip(
-          id: 'temp', // backend will assign
-          name: _name.text.trim(),
-          startDate: _start!,
-          endDate: _end!,
-          initialBudget: 0,
-          currency: _currency.value,
-          participants: _participants,
-        ),
-      );
-      if (!mounted) return;
-      Navigator.of(context).pop<Trip>(created);
-    } catch (e) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(SnackBar(content: Text('Create failed: $e')));
-    } finally {
-      if (mounted) setState(() => _submitting = false);
-    }
+  void _submitForm() {
+    if (!_formKey.currentState!.validate()) return;
+
+    final trip = Trip(
+      id: 'trip_${DateTime.now().millisecondsSinceEpoch}',
+      name: _nameController.text.trim(),
+      startDate: _startDate,
+      endDate: _endDate,
+      initialBudget: double.parse(_budgetController.text),
+      currency: _selectedCurrency,
+      participants: const ['You'],
+    );
+
+    widget.onTripCreated(trip);
+    Navigator.of(context).pop(trip);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('New trip')),
+      appBar: AppBar(
+        title: const Text('Create Trip'),
+        actions: [
+          TextButton(
+            onPressed: _submitForm,
+            child: const Text('CREATE', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
       body: Form(
-        key: _form,
+        key: _formKey,
         child: ListView(
           padding: const EdgeInsets.all(16),
           children: [
             TextFormField(
-              controller: _name,
-              decoration: const InputDecoration(labelText: 'Trip name'),
-              validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.calendar_today),
-                    label: Text(_start == null
-                        ? 'Start date'
-                        : _start!.toString().split(' ').first),
-                    onPressed: () => _pickDate(true),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.calendar_month),
-                    label: Text(_end == null
-                        ? 'End date'
-                        : _end!.toString().split(' ').first),
-                    onPressed: () => _pickDate(false),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            ValueListenableBuilder<String>(
-              valueListenable: _currency,
-              builder: (_, cur, __) {
-                return DropdownButtonFormField<String>(
-                  value: cur,
-                  decoration: const InputDecoration(labelText: 'Currency'),
-                  items: const ['EUR', 'USD', 'GBP', 'INR']
-                      .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                      .toList(),
-                  onChanged: (v) => _currency.value = v ?? cur,
-                );
+              controller: _nameController,
+              decoration: const InputDecoration(
+                labelText: 'Trip Name',
+                hintText: 'e.g. Weekend in Paris',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.luggage),
+              ),
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Please enter a trip name';
+                }
+                return null;
               },
             ),
             const SizedBox(height: 16),
-            Text('Participants',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: [
-                for (final p in _participants)
-                  Chip(
-                      label: Text(p),
-                      onDeleted: () => setState(() => _participants.remove(p))),
-                SizedBox(
-                  width: 220,
-                  child: TextField(
-                    controller: _participantCtrl,
-                    decoration: InputDecoration(
-                      hintText: 'Add name',
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.add),
-                        onPressed: () {
-                          final v = _participantCtrl.text.trim();
-                          if (v.isNotEmpty && !_participants.contains(v)) {
-                            setState(() => _participants.add(v));
-                            _participantCtrl.clear();
-                          }
-                        },
-                      ),
-                    ),
-                    onSubmitted: (_) {
-                      final v = _participantCtrl.text.trim();
-                      if (v.isNotEmpty && !_participants.contains(v)) {
-                        setState(() => _participants.add(v));
-                        _participantCtrl.clear();
-                      }
-                    },
-                  ),
-                ),
-              ],
+            ListTile(
+              title: const Text('Start Date'),
+              subtitle: Text('${_startDate.day}/${_startDate.month}/${_startDate.year}'),
+              leading: const Icon(Icons.calendar_today),
+              trailing: const Icon(Icons.arrow_forward_ios),
+              onTap: () => _selectDate(context, true),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: const BorderSide(color: Colors.grey),
+              ),
             ),
-            const SizedBox(height: 24),
-            FilledButton.icon(
-              onPressed: _submitting ? null : _submit,
-              icon: const Icon(Icons.check),
-              label:
-                  Text(_submitting ? 'Creating...' : 'Create trip'),
+            const SizedBox(height: 16),
+            ListTile(
+              title: const Text('End Date'),
+              subtitle: Text('${_endDate.day}/${_endDate.month}/${_endDate.year}'),
+              leading: const Icon(Icons.calendar_today),
+              trailing: const Icon(Icons.arrow_forward_ios),
+              onTap: () => _selectDate(context, false),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(8),
+                side: const BorderSide(color: Colors.grey),
+              ),
+            ),
+            const SizedBox(height: 16),
+            TextFormField(
+              controller: _budgetController,
+              decoration: const InputDecoration(
+                labelText: 'Budget',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.euro),
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              validator: (value) {
+                if (value == null || value.trim().isEmpty) {
+                  return 'Please enter a budget';
+                }
+                if (double.tryParse(value) == null) {
+                  return 'Please enter a valid number';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            DropdownButtonFormField<String>(
+              value: _selectedCurrency,
+              decoration: const InputDecoration(
+                labelText: 'Currency',
+                border: OutlineInputBorder(),
+                prefixIcon: Icon(Icons.monetization_on),
+              ),
+              items: _currencies.map((currency) {
+                return DropdownMenuItem(
+                  value: currency,
+                  child: Text(currency),
+                );
+              }).toList(),
+              onChanged: (value) {
+                setState(() {
+                  _selectedCurrency = value!;
+                });
+              },
+            ),
+            const SizedBox(height: 32),
+            ElevatedButton(
+              onPressed: _submitForm,
+              style: ElevatedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+              child: const Text('Create Trip', style: TextStyle(fontSize: 16)),
             ),
           ],
         ),
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _budgetController.dispose();
+    super.dispose();
   }
 }
 
