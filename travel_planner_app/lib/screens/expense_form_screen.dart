@@ -1,128 +1,107 @@
 import 'package:flutter/material.dart';
 
-class ExpenseFormScreen extends StatelessWidget {
-  final void Function(
-    String title,
-    double amount,
-    String category,
-    String paidBy,
-    List<String> sharedWith,
-  ) onAddExpense;
+class ExpenseFormScreen extends StatefulWidget {
+  const ExpenseFormScreen({
+    super.key,
+    required this.participants,
+    required this.onSubmit,
+    this.defaultCurrency,
+  });
 
-  const ExpenseFormScreen({super.key, required this.onAddExpense});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Add Expense')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: ExpenseFormFields(
-          onSubmit: (title, amount, category, paidBy, sharedWith) {
-            onAddExpense(title, amount, category, paidBy, sharedWith);
-            Navigator.of(context).pop();
-          },
-        ),
-      ),
-    );
-  }
-}
-
-class ExpenseFormFields extends StatefulWidget {
-  final void Function(
-    String title,
-    double amount,
-    String category,
-    String paidBy,
-    List<String> sharedWith,
-  ) onSubmit;
-  const ExpenseFormFields({super.key, required this.onSubmit});
+  final List<String> participants;
+  final void Function({
+    required String title,
+    required double amount,
+    required String category,
+    required String paidBy,
+    required List<String> sharedWith,
+  }) onSubmit;
+  final String? defaultCurrency;
 
   @override
-  State<ExpenseFormFields> createState() => _ExpenseFormFieldsState();
+  State<ExpenseFormScreen> createState() => _ExpenseFormScreenState();
 }
 
-class _ExpenseFormFieldsState extends State<ExpenseFormFields> {
-  final _form = GlobalKey<FormState>();
+class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   final _title = TextEditingController();
   final _amount = TextEditingController();
   String _category = 'Food';
-  String _paidBy = 'Me';
-  final _shared = <String>{'Me'};
+  late String _paidBy;
+  late Set<String> _shared;
+
+  @override
+  void initState() {
+    super.initState();
+    _paidBy = widget.participants.first;
+    _shared = {...widget.participants};
+  }
+
+  void _save() {
+    final title = _title.text.trim();
+    final amount = double.tryParse(_amount.text.trim()) ?? 0;
+    if (title.isEmpty || amount <= 0 || _shared.isEmpty) return;
+    widget.onSubmit(
+      title: title,
+      amount: amount,
+      category: _category,
+      paidBy: _paidBy,
+      sharedWith: _shared.toList(),
+    );
+    Navigator.pop(context);
+  }
 
   @override
   Widget build(BuildContext context) {
-    return Form(
-      key: _form,
-      child: Column(
+    final ccy = widget.defaultCurrency ?? '';
+    return Scaffold(
+      appBar: AppBar(title: const Text('Add Expense')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
         children: [
-          TextFormField(
+          TextField(
             controller: _title,
             decoration: const InputDecoration(
-              labelText: 'Title',
-              prefixIcon: Icon(Icons.edit_outlined),
-            ),
-            validator: (v) => (v == null || v.trim().isEmpty) ? 'Required' : null,
+                labelText: 'Title', hintText: 'e.g. Dinner'),
           ),
-          const SizedBox(height: 12),
-          TextFormField(
+          const SizedBox(height: 8),
+          TextField(
             controller: _amount,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(
-              labelText: 'Amount',
-              prefixIcon: Icon(Icons.euro_outlined),
-            ),
-            validator: (v) => (double.tryParse(v ?? '') == null)
-                ? 'Enter a valid number'
-                : null,
+            decoration: InputDecoration(
+                labelText: 'Amount ${ccy.isEmpty ? '' : '($ccy)'}'),
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           DropdownButtonFormField<String>(
             value: _category,
             items: const ['Food', 'Transport', 'Lodging', 'Activity', 'Other']
-                .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
             onChanged: (v) => setState(() => _category = v ?? 'Food'),
-            decoration: const InputDecoration(
-              labelText: 'Category',
-              prefixIcon: Icon(Icons.category_outlined),
-            ),
+            decoration: const InputDecoration(labelText: 'Category'),
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           DropdownButtonFormField<String>(
             value: _paidBy,
-            items: _shared
-                .map((e) => DropdownMenuItem(value: e, child: Text(e)))
+            items: widget.participants
+                .map((p) => DropdownMenuItem(value: p, child: Text(p)))
                 .toList(),
-            onChanged: (v) => setState(() => _paidBy = v ?? 'Me'),
-            decoration: const InputDecoration(
-              labelText: 'Paid by',
-              prefixIcon: Icon(Icons.person_outline),
-            ),
+            onChanged: (v) => setState(() => _paidBy = v ?? _paidBy),
+            decoration: const InputDecoration(labelText: 'Paid by'),
           ),
+          const SizedBox(height: 8),
+          const Text('Shared with'),
+          const SizedBox(height: 4),
+          ...widget.participants.map((p) => CheckboxListTile(
+                title: Text(p),
+                value: _shared.contains(p),
+                onChanged: (v) => setState(() {
+                  v == true ? _shared.add(p) : _shared.remove(p);
+                }),
+              )),
           const SizedBox(height: 12),
-          Align(
-            alignment: Alignment.centerLeft,
-            child: Wrap(
-              spacing: 8,
-              children:
-                  _shared.map((p) => Chip(label: Text(p))).toList(),
-            ),
-          ),
-          const SizedBox(height: 16),
           FilledButton.icon(
-            onPressed: () {
-              if (_form.currentState!.validate()) {
-                widget.onSubmit(
-                  _title.text.trim(),
-                  double.parse(_amount.text.trim()),
-                  _category,
-                  _paidBy,
-                  _shared.toList(),
-                );
-              }
-            },
-            icon: const Icon(Icons.check),
+            onPressed: _save,
+            icon: const Icon(Icons.save),
             label: const Text('Save'),
           ),
         ],
@@ -130,4 +109,3 @@ class _ExpenseFormFieldsState extends State<ExpenseFormFields> {
     );
   }
 }
-

@@ -1,6 +1,6 @@
 class GroupBalance {
   final String from; // who owes
-  final String to; // who is owed
+  final String to; // who gets paid
   final double amount;
   final String currency;
 
@@ -11,11 +11,10 @@ class GroupBalance {
     required this.currency,
   });
 
-  factory GroupBalance.fromJson(Map<String, dynamic> j) => GroupBalance(
-        from: j['from'] as String,
-        to: j['to'] as String,
-        amount: (j['amount'] as num).toDouble(),
-        currency: (j['currency'] ?? 'EUR') as String,
+  factory GroupBalance.fromJson(Map<String, dynamic> json) => GroupBalance(
+        from: json['from'],
+        to: json['to'],
+        amount: (json['amount'] ?? 0).toDouble(),
+        currency: json['currency'] ?? 'EUR',
       );
 }
-

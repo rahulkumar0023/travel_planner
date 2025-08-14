@@ -1,164 +1,160 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import '../models/trip.dart';
 import '../services/api_service.dart';
-import 'dashboard_screen.dart';
-import 'trip_form_screen.dart';
+import '../models/trip.dart';
+import 'dart:math';
+import '../services/trip_storage_service.dart';
+import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
 
 class TripSelectionScreen extends StatefulWidget {
-  const TripSelectionScreen({super.key});
+  final ApiService api;
+  const TripSelectionScreen({super.key, required this.api});
 
   @override
   State<TripSelectionScreen> createState() => _TripSelectionScreenState();
 }
 
 class _TripSelectionScreenState extends State<TripSelectionScreen> {
-  List<Trip> _trips = [];
-  bool _loading = true;
-  String? _error;
+  late Future<List<Trip>> _future;
 
   @override
   void initState() {
     super.initState();
-    _loadTrips();
+    _future = widget.api.fetchTrips();
   }
 
-  Future<void> _loadTrips() async {
-    try {
-      final trips = await ApiService.fetchTrips();
-      setState(() {
-        _trips = trips;
-        _loading = false;
-      });
-    } catch (e) {
-      setState(() {
-        _error = e.toString();
-        _loading = false;
-      });
-    }
+  Future<void> _refresh() async {
+    setState(() {
+      _future = widget.api.fetchTrips();
+    });
+    await _future;
   }
 
-  Future<void> _selectTrip(Trip trip) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('selected_trip_id', trip.id);
-    await prefs.setString('selected_trip_name', trip.name);
+  Future<void> _createTripDialog() async {
+    final nameCtrl = TextEditingController();
+    final budgetCtrl = TextEditingController(text: '1000');
+    //final currencyCtrl = TextEditingController(text: 'EUR');
 
-    if (!mounted) return;
-    Navigator.of(context).pushReplacement(
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
-    );
-  }
+    String selectedCcy = 'EUR';
 
-  Future<void> _createNewTrip() async {
-    final result = await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => TripFormScreen(
-          onTripCreated: (trip) async {
-            await ApiService.addTrip(trip);
-            await _selectTrip(trip);
-          },
+    final created = await showDialog<Trip>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Create a Trip'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+                controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Trip name')),
+            TextField(
+                controller: budgetCtrl,
+                decoration: const InputDecoration(labelText: 'Initial budget'),
+                keyboardType: TextInputType.number),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: selectedCcy,
+              decoration: const InputDecoration(labelText: 'Currency'),
+              items: kCurrencyCodes
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => selectedCcy = (v ?? 'EUR'),
+            ),
+          ],
         ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              if (nameCtrl.text.trim().isEmpty) return;
+              final id = 'trip_${Random().nextInt(999999)}';
+              final trip = Trip(
+                id: id,
+                name: nameCtrl.text.trim(),
+                startDate: DateTime.now(),
+                endDate: DateTime.now().add(const Duration(days: 3)),
+                initialBudget: double.tryParse(budgetCtrl.text.trim()) ?? 0,
+                currency: selectedCcy, // <- from dropdown, guaranteed ISO code
+                participants: const [],
+              );
+              Navigator.pop(ctx, trip);
+            },
+            child: const Text('Create'),
+          ),
+        ],
       ),
     );
-    if (result != null) {
-      _loadTrips();
+
+    if (created != null) {
+      final saved = await widget.api.createTrip(created);
+      await TripStorageService.save(saved);
+      setState(() {
+        _future = widget.api.fetchTrips(); // refresh list after creation
+      });
+      if (!mounted) return;
+      Navigator.of(context).pop<Trip>(saved);
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Select Trip'),
-        centerTitle: true,
-      ),
-      body: _loading
-          ? const Center(child: CircularProgressIndicator())
-          : _error != null
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      const Icon(Icons.error_outline, size: 64, color: Colors.red),
-                      const SizedBox(height: 16),
-                      Text('Error: $_error'),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        onPressed: _loadTrips,
-                        child: const Text('Retry'),
-                      ),
-                    ],
-                  ),
-                )
-              : _trips.isEmpty
-                  ? _buildEmptyState()
-                  : _buildTripList(),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _createNewTrip,
-        tooltip: 'Create New Trip',
-        child: const Icon(Icons.add),
-      ),
-    );
-  }
-
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.luggage, size: 64, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text(
-            'No trips yet',
-            style: Theme.of(context).textTheme.headlineSmall,
-          ),
-          const SizedBox(height: 8),
-          const Text('Create your first trip to get started'),
-          const SizedBox(height: 24),
-          ElevatedButton.icon(
-            onPressed: _createNewTrip,
-            icon: const Icon(Icons.add),
-            label: const Text('Create Trip'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTripList() {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: _trips.length,
-      itemBuilder: (context, index) {
-        final trip = _trips[index];
-        return Card(
-          margin: const EdgeInsets.only(bottom: 12),
-          child: ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Theme.of(context).primaryColor,
-              child: Text(
-                trip.name.substring(0, 1).toUpperCase(),
-                style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+      appBar: AppBar(title: const Text('Select Trip')),
+      body: FutureBuilder<List<Trip>>(
+        future: _future,
+        builder: (ctx, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Text('Error loading trips:\n${snap.error}',
+                    textAlign: TextAlign.center),
               ),
+            );
+          }
+          final trips = snap.data ?? [];
+          if (trips.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text('No trips yet'),
+                  const SizedBox(height: 12),
+                  FilledButton(
+                      onPressed: _createTripDialog,
+                      child: const Text('Create your first trip')),
+                ],
+              ),
+            );
+          }
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemBuilder: (_, i) {
+                final t = trips[i];
+                return ListTile(
+                  title: Text(t.name),
+                  subtitle: Text(
+                      '${t.currency} • Budget ${t.initialBudget.toStringAsFixed(0)}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).pop<Trip>(t),
+                );
+              },
+              separatorBuilder: (_, __) => const Divider(height: 1),
+              itemCount: trips.length,
             ),
-            title: Text(trip.name),
-            subtitle: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  '${trip.startDate.day}/${trip.startDate.month}/${trip.startDate.year} - ${trip.endDate.day}/${trip.endDate.month}/${trip.endDate.year}',
-                ),
-                Text(
-                  '${trip.initialBudget} ${trip.currency}',
-                  style: const TextStyle(fontWeight: FontWeight.w500),
-                ),
-              ],
-            ),
-            trailing: const Icon(Icons.arrow_forward_ios),
-            onTap: () => _selectTrip(trip),
-          ),
-        );
-      },
+          );
+        },
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _createTripDialog,
+        icon: const Icon(Icons.add),
+        label: const Text('New Trip'),
+      ),
     );
   }
 }

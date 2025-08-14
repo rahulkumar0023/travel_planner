@@ -1,71 +1,75 @@
 import 'package:flutter/material.dart';
+import '../services/api_service.dart';
+import '../services/trip_storage_service.dart';
 import '../models/trip.dart';
 import 'dashboard_screen.dart';
-import 'group_balance_screen.dart';
-import 'trip_picker_screen.dart';
+import 'trip_selection_screen.dart';
 
 class AppShell extends StatefulWidget {
-  const AppShell({super.key});
+  final ApiService api;
+  const AppShell({super.key, required this.api});
 
   @override
   State<AppShell> createState() => _AppShellState();
 }
 
 class _AppShellState extends State<AppShell> {
-  int _index = 0;
+  Trip? _activeTrip;
+  int _tabIndex = 0;
 
-  // TODO: replace with your real trip selection persistence
-  Trip _activeTrip = Trip(
-    id: 't1',
-    name: 'Italy Trip',
-    startDate: DateTime(2025, 9, 1),
-    endDate: DateTime(2025, 9, 10),
-    initialBudget: 1500.0,
-    currency: 'EUR',
-    participants: const ['Rahul', 'Alex', 'Maya'],
-  );
+  @override
+  void initState() {
+    super.initState();
+    _activeTrip = TripStorageService.loadLightweight();
+    // If no trip selected yet, push the picker.
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (_activeTrip == null) {
+        final picked = await Navigator.of(context).push<Trip>(
+          MaterialPageRoute(
+              builder: (_) => TripSelectionScreen(api: widget.api)),
+        );
+        if (picked != null) {
+          await TripStorageService.save(picked);
+          setState(() => _activeTrip = picked);
+        }
+      }
+    });
+  }
 
-  void _setActiveTrip(Trip t) => setState(() => _activeTrip = t);
+  void _switchTrip() async {
+    final picked = await Navigator.of(context).push<Trip>(
+      MaterialPageRoute(builder: (_) => TripSelectionScreen(api: widget.api)),
+    );
+    if (picked != null) {
+      await TripStorageService.save(picked);
+      setState(() => _activeTrip = picked);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      DashboardScreen(activeTrip: _activeTrip),
-      GroupBalanceScreen(activeTrip: _activeTrip!),
-      TripPickerScreen(
-        current: _activeTrip,
-        onPick: (t) {
-          _setActiveTrip(t);
-          setState(() => _index = 0); // jump back to Dashboard
-        },
+    final tabs = <Widget>[
+      DashboardScreen(
+        activeTrip: _activeTrip,
+        onSwitchTrip: _switchTrip,
+        api: widget.api,
       ),
+      const Center(child: Text('Budgets (coming soon)')),
+      const Center(child: Text('Settings (coming soon)')),
     ];
 
     return Scaffold(
-      appBar: AppBar(title: Text(_activeTrip.name)),
-      body: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 250),
-        child: pages[_index],
-      ),
+      body: tabs[_tabIndex],
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _index,
-        onDestinationSelected: (i) => setState(() => _index = i),
+        selectedIndex: _tabIndex,
+        onDestinationSelected: (i) => setState(() => _tabIndex = i),
         destinations: const [
           NavigationDestination(
-            icon: Icon(Icons.dashboard_outlined),
-            selectedIcon: Icon(Icons.dashboard),
-            label: 'Dashboard',
-          ),
+              icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
           NavigationDestination(
-            icon: Icon(Icons.people_outline),
-            selectedIcon: Icon(Icons.people),
-            label: 'Balances',
-          ),
+              icon: Icon(Icons.pie_chart_outline), label: 'Budgets'),
           NavigationDestination(
-            icon: Icon(Icons.public_outlined),
-            selectedIcon: Icon(Icons.public),
-            label: 'Trips',
-          ),
+              icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
       ),
     );
