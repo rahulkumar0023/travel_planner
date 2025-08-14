@@ -1,43 +1,88 @@
 import 'package:flutter/material.dart';
-import '../models/trip.dart';
 
-class TripPickerScreen extends StatelessWidget {
-  final Trip current;
+import '../models/trip.dart';
+import '../services/api_service.dart';
+
+class TripPickerScreen extends StatefulWidget {
   final void Function(Trip) onPick;
-  const TripPickerScreen({super.key, required this.current, required this.onPick});
+  const TripPickerScreen({super.key, required this.onPick});
+
+  @override
+  State<TripPickerScreen> createState() => _TripPickerScreenState();
+}
+
+class _TripPickerScreenState extends State<TripPickerScreen> {
+  late Future<List<Trip>> _future;
+
+  @override
+  void initState() {
+    super.initState();
+    _future = ApiService.fetchTrips();
+  }
+
+  Future<void> _refresh() async {
+    setState(() => _future = ApiService.fetchTrips());
+    await _future;
+  }
 
   @override
   Widget build(BuildContext context) {
-    // TODO: fetch from API; for now demo two trips
-    final demo = [
-      current,
-      Trip(
-        id: 't2',
-        name: 'Spain Escape',
-        startDate: DateTime(2025, 10, 5),
-        endDate: DateTime(2025, 10, 12),
-        initialBudget: 1200,
-        currency: 'EUR',
-        participants: const ['Rahul', 'Alex'],
-      ),
-    ];
+    return RefreshIndicator(
+      onRefresh: _refresh,
+      child: FutureBuilder<List<Trip>>(
+        future: _future,
+        builder: (context, snap) {
+          if (snap.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snap.hasError) {
+            return ListView(
+              children: [
+                const SizedBox(height: 100),
+                const Center(child: Text('Could not load trips')),
+                Center(
+                    child: Text('${snap.error}',
+                        style: Theme.of(context).textTheme.bodySmall)),
+                const SizedBox(height: 12),
+                Center(
+                  child:
+                      ElevatedButton(onPressed: _refresh, child: const Text('Retry')),
+                ),
+              ],
+            );
+          }
 
-    return ListView.separated(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
-      itemCount: demo.length,
-      separatorBuilder: (_, __) => const SizedBox(height: 12),
-      itemBuilder: (context, i) {
-        final t = demo[i];
-        final isActive = t.id == current.id;
-        return Card(
-          child: ListTile(
-            title: Text(t.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-            subtitle: Text('${t.startDate.toString().split(' ').first} → ${t.endDate.toString().split(' ').first} • ${t.currency}'),
-            trailing: isActive ? const Icon(Icons.check_circle, color: Colors.green) : null,
-            onTap: () => onPick(t),
-          ),
-        );
-      },
+          final trips = snap.data ?? [];
+          if (trips.isEmpty) {
+            return ListView(
+              children: const [
+                SizedBox(height: 100),
+                Center(child: Text('No trips yet — create one!')),
+              ],
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            itemCount: trips.length,
+            separatorBuilder: (_, __) => const SizedBox(height: 12),
+            itemBuilder: (context, i) {
+              final t = trips[i];
+              final d1 = t.startDate.toString().split(' ').first;
+              final d2 = t.endDate.toString().split(' ').first;
+              return Card(
+                child: ListTile(
+                  title: Text(t.name,
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  subtitle: Text('$d1 → $d2 • ${t.currency}'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => widget.onPick(t),
+                ),
+              );
+            },
+          );
+        },
+      ),
     );
   }
 }

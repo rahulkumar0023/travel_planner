@@ -23,15 +23,15 @@ class Trip {
       name: json['name'],
       startDate: DateTime.parse(json['startDate']),
       endDate: DateTime.parse(json['endDate']),
-      initialBudget: json['initialBudget'].toDouble(),
+      initialBudget: (json['initialBudget'] as num).toDouble(),
       currency: json['currency'],
       participants: List<String>.from(json['participants']),
     );
   }
 
-  Map<String, dynamic> toJson() {
+  Map<String, dynamic> toJson({bool withId = true}) {
     return {
-      'id': id,
+      if (withId) 'id': id,
       'name': name,
       'startDate': startDate.toIso8601String(),
       'endDate': endDate.toIso8601String(),
