@@ -5,6 +5,7 @@ import 'package:http/http.dart' as http;
 import '../models/expense.dart';
 import '../models/group_balance.dart';
 import '../models/trip.dart';
+import '../models/budget.dart';
 
 // ⚠️ set this to your Render URL
 class ApiService {
@@ -62,6 +63,63 @@ class ApiService {
     }
     final data = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
     return data.map(GroupBalance.fromJson).toList();
+  }
+
+  // ----- budgets -----
+  static Future<MonthlyBudgetSummary> fetchMonthlySummary(
+      DateTime month) async {
+    // TODO: call /budgets/summary?month=YYYY-MM
+    // For now, return mock to see UI immediately
+    return MonthlyBudgetSummary(
+      month: DateTime(month.year, month.month),
+      currency: 'EUR',
+      initialBalance: 5537,
+      totalBudgeted: 5537,
+      totalSpent: 5050.46,
+      remaining: 5537 - 5050.46,
+    );
+  }
+
+  static Future<List<Budget>> fetchMonthlyBudgets(DateTime month) async {
+    // TODO: call /budgets?month=YYYY-MM (or your chosen endpoint)
+    // Mock data to visualize
+    return [
+      Budget(
+          id: 'b1',
+          name: 'Recurring',
+          currency: 'EUR',
+          planned: 917.84,
+          spent: 867.27,
+          colorIndex: 0),
+      Budget(
+          id: 'b2',
+          name: 'Shared household and living',
+          currency: 'EUR',
+          planned: 500,
+          spent: 500,
+          colorIndex: 1),
+      Budget(
+          id: 'b3',
+          name: 'Discretionary and Flex',
+          currency: 'EUR',
+          planned: 458,
+          spent: 22.03,
+          colorIndex: 2),
+      Budget(
+          id: 'b4',
+          name: 'Emergency fund',
+          currency: 'EUR',
+          planned: 3026.8,
+          spent: 3026.8,
+          colorIndex: 3),
+      Budget(
+          id: 'b5',
+          name: 'Company loan repayment',
+          currency: 'EUR',
+          planned: 100,
+          spent: 100,
+          colorIndex: 4),
+    ];
   }
 
   // ----- currency -----
