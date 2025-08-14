@@ -21,9 +21,10 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
   }
 
   Future<void> _refresh() async {
-    setState(
-        () => _future = ApiService.fetchGroupBalances(widget.activeTrip.id));
-    await _future;
+    final fut = ApiService.fetchGroupBalances(widget.activeTrip.id);
+    if (!mounted) return;
+    setState(() => _future = fut);
+    await fut;
   }
 
   @override

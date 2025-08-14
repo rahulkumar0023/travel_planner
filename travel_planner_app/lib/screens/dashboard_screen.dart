@@ -37,6 +37,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _loadFromApi() async {
     try {
       final remote = await ApiService.fetchExpenses(trip.id); // use real tripId
+      if (!mounted) return;
       setState(() {
         _expenses = remote;
       });
@@ -87,6 +88,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
       sharedWith: sharedWith,
     );
 
+    if (!mounted) return;
     setState(() => _expenses = [..._expenses, expense]);
     _expensesBox.add(expense);
     _convert();

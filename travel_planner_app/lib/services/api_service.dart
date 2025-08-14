@@ -56,8 +56,9 @@ class ApiService {
   // ----- balances -----
   static Future<List<GroupBalance>> fetchGroupBalances(String tripId) async {
     final res = await http.get(Uri.parse('$baseUrl/balances/$tripId'));
+    if (res.statusCode == 404) return <GroupBalance>[];
     if (res.statusCode != 200) {
-      throw Exception('Split fetch failed: ${res.statusCode}');
+      throw Exception('Split fetch failed: ${res.statusCode} ${res.body}');
     }
     final data = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
     return data.map(GroupBalance.fromJson).toList();
