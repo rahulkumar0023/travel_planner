@@ -1,10 +1,11 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:travel_planner_app/services/api_service.dart';
 import '../models/expense.dart';
 import '../models/trip.dart';
-import 'expense_form_screen.dart';
+import 'expense_form_sheet.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key, required this.activeTrip});
@@ -111,12 +112,26 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: () {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (_) => ExpenseFormScreen(onAddExpense: _addExpense),
+        onPressed: () async {
+          HapticFeedback.lightImpact();
+          final added = await showModalBottomSheet<bool>(
+            context: context,
+            isScrollControlled: true,
+            showDragHandle: true,
+            shape: const RoundedRectangleBorder(
+              borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+            ),
+            builder: (ctx) => Padding(
+              padding: EdgeInsets.only(
+                  bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              child: ExpenseFormSheet(onAddExpense: _addExpense),
             ),
           );
+          if (added == true && context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Expense added')),
+            );
+          }
         },
         label: const Text('Add expense'),
         icon: const Icon(Icons.add),
