@@ -6,6 +6,7 @@ import 'group_balance_screen.dart';
 import 'trip_form_screen.dart';
 import 'trip_picker_screen.dart';
 import 'itinerary_screen.dart';
+import 'monthly_budget_screen.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -42,6 +43,7 @@ class _AppShellState extends State<AppShell> {
       ItineraryScreen(
         getActiveTrip: () => _activeTrip, // may be null until user picks
       ),
+      const MonthlyBudgetScreen(),
     ];
 
     return Scaffold(
@@ -73,6 +75,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.map_outlined),
             selectedIcon: Icon(Icons.map),
             label: 'Itinerary',
+          ),
+          NavigationDestination(
+            icon: Icon(Icons.pie_chart_outline),
+            selectedIcon: Icon(Icons.pie_chart),
+            label: 'Budgets',
           ),
         ],
       ),
