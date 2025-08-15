@@ -4,8 +4,8 @@ import '../services/trip_storage_service.dart';
 import '../models/trip.dart';
 import 'dashboard_screen.dart';
 import 'trip_selection_screen.dart';
+import 'expenses_screen.dart';
 import 'budgets_screen.dart';
-import 'settings_screen.dart';
 
 class AppShell extends StatefulWidget {
   final ApiService api;
@@ -58,8 +58,8 @@ class _AppShellState extends State<AppShell> {
         onSwitchTrip: _switchTrip,
         api: widget.api,
       ),
-      BudgetsScreen(api: widget.api),          // ← real Budgets
-      SettingsScreen(api: widget.api),         // ← real Settings
+      ExpensesScreen(api: widget.api),
+      BudgetsScreen(api: widget.api),
     ];
 
     return Scaffold(
@@ -68,9 +68,9 @@ class _AppShellState extends State<AppShell> {
         selectedIndex: _tabIndex,
         onDestinationSelected: (i) => setState(() => _tabIndex = i),
         destinations: const [
-          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
-          NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Budgets'),
-          NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
+          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
+          NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Expenses'),
+          NavigationDestination(icon: Icon(Icons.savings_outlined), label: 'Budgets'),
         ],
       ),
     );

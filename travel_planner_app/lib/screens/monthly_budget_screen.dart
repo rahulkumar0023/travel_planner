@@ -3,7 +3,8 @@ import '../models/budget.dart';
 import '../services/api_service.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
-  const MonthlyBudgetScreen({super.key});
+  final ApiService api;
+  const MonthlyBudgetScreen({super.key, required this.api});
 
   @override
   State<MonthlyBudgetScreen> createState() => _MonthlyBudgetScreenState();
@@ -21,8 +22,8 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
   }
 
   void _load() {
-    _summaryFut = ApiService.fetchMonthlySummary(_month);
-    _budgetsFut = ApiService.fetchMonthlyBudgets(_month);
+    _summaryFut = widget.api.fetchMonthlySummary(_month);
+    _budgetsFut = widget.api.fetchMonthlyBudgets(_month);
   }
 
   Future<void> _pickMonth() async {
