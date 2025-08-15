@@ -4,6 +4,8 @@ import '../services/trip_storage_service.dart';
 import '../models/trip.dart';
 import 'dashboard_screen.dart';
 import 'trip_selection_screen.dart';
+import 'budgets_screen.dart';
+import 'settings_screen.dart';
 
 class AppShell extends StatefulWidget {
   final ApiService api;
@@ -21,13 +23,14 @@ class _AppShellState extends State<AppShell> {
   void initState() {
     super.initState();
     _activeTrip = TripStorageService.loadLightweight();
-    // If no trip selected yet, push the picker.
+
+    // If no trip is selected yet, open the picker after first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      if (_activeTrip == null) {
+      if (_activeTrip == null && mounted) {
         final picked = await Navigator.of(context).push<Trip>(
-          MaterialPageRoute(
-              builder: (_) => TripSelectionScreen(api: widget.api)),
+          MaterialPageRoute(builder: (_) => TripSelectionScreen(api: widget.api)),
         );
+        if (!mounted) return;
         if (picked != null) {
           await TripStorageService.save(picked);
           setState(() => _activeTrip = picked);
@@ -42,6 +45,7 @@ class _AppShellState extends State<AppShell> {
     );
     if (picked != null) {
       await TripStorageService.save(picked);
+      if (!mounted) return;
       setState(() => _activeTrip = picked);
     }
   }
@@ -54,8 +58,8 @@ class _AppShellState extends State<AppShell> {
         onSwitchTrip: _switchTrip,
         api: widget.api,
       ),
-      const Center(child: Text('Budgets (coming soon)')),
-      const Center(child: Text('Settings (coming soon)')),
+      BudgetsScreen(api: widget.api),          // ← real Budgets
+      SettingsScreen(api: widget.api),         // ← real Settings
     ];
 
     return Scaffold(
@@ -64,12 +68,9 @@ class _AppShellState extends State<AppShell> {
         selectedIndex: _tabIndex,
         onDestinationSelected: (i) => setState(() => _tabIndex = i),
         destinations: const [
-          NavigationDestination(
-              icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
-          NavigationDestination(
-              icon: Icon(Icons.pie_chart_outline), label: 'Budgets'),
-          NavigationDestination(
-              icon: Icon(Icons.settings_outlined), label: 'Settings'),
+          NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Dashboard'),
+          NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Budgets'),
+          NavigationDestination(icon: Icon(Icons.settings_outlined), label: 'Settings'),
         ],
       ),
     );

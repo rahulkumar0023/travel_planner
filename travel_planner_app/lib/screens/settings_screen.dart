@@ -1,9 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:travel_planner_app/models/currencies.dart';
 import '../services/prefs_service.dart';
+import 'sign_in_screen.dart';
+import '../services/api_service.dart';
+
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  const SettingsScreen({super.key, required this.api});
+  final ApiService api;
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -41,6 +45,16 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   const SnackBar(content: Text('Home currency updated')),
                 );
               },
+            ),
+          ),
+          const SizedBox(height: 24),
+          ListTile(
+            leading: const Icon(Icons.person),
+            title: const Text('Sign in'),
+            subtitle: const Text('Google or Apple (for sync & security)'),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
             ),
           ),
         ],

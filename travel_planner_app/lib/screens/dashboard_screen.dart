@@ -66,18 +66,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (t == null) return;
     try {
       final home = await PrefsService.getHomeCurrency();
-      final approx = await widget.api.convert(_totalSpent, t.currency, home);
+      final approx = await widget.api.convert(
+        amount: _totalSpent,
+        from: t.currency,
+        to: home,
+      );
       if (!mounted) return;
       setState(() {
-        if (approx != null) {
-          _homeCurrencyCode = home;
-          _approxHomeValue = approx;
-        }
+        _homeCurrencyCode = home;
+        _approxHomeValue = approx;
       });
     } catch (_) {
       // ignore conversion errors for now
     }
   }
+
 
   Future<void> _addExpenseQuick() async {
     final t = widget.activeTrip;
@@ -210,7 +213,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: const Icon(Icons.settings_outlined),
             onPressed: () {
               Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SettingsScreen()),
+                MaterialPageRoute(
+                  builder: (_) => SettingsScreen(api: widget.api),
+                ),
               );
             },
           ),
