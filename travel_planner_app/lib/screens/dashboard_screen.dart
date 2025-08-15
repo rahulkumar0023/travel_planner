@@ -111,7 +111,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (t == null) return;
 
     // Fetch participants from your participants service (NOT http)
-    final List<String> participants = await ParticipantsService.get(t.id);
+    final List<String> participants = participantsService.participants;
 
     if (!mounted) return;
     await Navigator.of(context).push(

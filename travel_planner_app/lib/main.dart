@@ -16,9 +16,13 @@ Future<void> main() async {
   // Trip storage init
   await TripStorageService.init();
 
-  // Your API base URL
-  final api =
-      ApiService(baseUrl: 'https://travel-planner-api-uo05.onrender.com');
+  // Read API base from --dart-define (with safe default)
+  const base = String.fromEnvironment(
+    'API_BASE_URL',
+    defaultValue: 'https://travel-planner-api-uo05.onrender.com',
+  );
+
+  final api = ApiService(baseUrl: base);
 
   runApp(TravelPlannerApp(api: api));
 }
@@ -50,7 +54,7 @@ class TravelPlannerApp extends StatelessWidget {
             ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark),
         cardTheme: const CardThemeData(elevation: 0),
       ),
-      home: AppShell(api: api),
+      home: AppShell(api: api), // ⬅ make sure AppShell takes ApiService
     );
   }
 }

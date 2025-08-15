@@ -5,7 +5,8 @@ import '../services/api_service.dart';
 
 class ItineraryScreen extends StatefulWidget {
   final Trip? Function() getActiveTrip;
-  const ItineraryScreen({super.key, required this.getActiveTrip});
+  final ApiService api;
+  const ItineraryScreen({super.key, required this.getActiveTrip, required this.api});
 
   @override
   State<ItineraryScreen> createState() => _ItineraryScreenState();
@@ -25,7 +26,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
       _plan = [];
     });
     try {
-      final res = await ApiService.generateItinerary(
+      final res = await widget.api.generateItinerary(
         destination: _dest.text.trim(),
         days: _days,
         budgetLevel: _budgetLevel.value,
