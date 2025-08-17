@@ -20,19 +20,55 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   void initState() {
     super.initState();
     _trip = TripStorageService.loadLightweight();
-    _future = _trip == null
-        ? Future.value(<Expense>[])
-        : widget.api.fetchExpenses(_trip!.id);
+    // 1) show local instantly (if dashboard saved anything to Hive)
+    _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpenses(_trip!.id);
   }
 
   Future<void> _refresh() async {
     _trip = TripStorageService.loadLightweight();
     setState(() {
-      _future = _trip == null
-          ? Future.value(<Expense>[])
-          : widget.api.fetchExpenses(_trip!.id);
+      _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpenses(_trip!.id);
     });
     await _future;
+  }
+
+  Future<void> _editExpenseDialog(Expense e) async {
+    final title = TextEditingController(text: e.title);
+    final amount = TextEditingController(text: e.amount.toString());
+    final category = TextEditingController(text: e.category);
+    final paidBy = TextEditingController(text: e.paidBy);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit expense'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
+          const SizedBox(height: 8),
+          TextField(controller: amount, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
+          const SizedBox(height: 8),
+          TextField(controller: category, decoration: const InputDecoration(labelText: 'Category')),
+          const SizedBox(height: 8),
+          TextField(controller: paidBy, decoration: const InputDecoration(labelText: 'Paid by')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      final updated = Expense(
+        id: e.id,
+        tripId: e.tripId,
+        title: title.text.trim(),
+        amount: double.tryParse(amount.text.trim()) ?? e.amount,
+        category: category.text.trim(),
+        date: e.date,
+        paidBy: paidBy.text.trim(),
+        sharedWith: e.sharedWith,
+      );
+      await widget.api.updateExpense(updated);
+    }
   }
 
   @override
@@ -72,8 +108,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 return ListTile(
                   title: Text(e.title),
                   subtitle: Text('${e.category} • ${e.paidBy}'),
-                  trailing: Text(
-                    '${e.amount.toStringAsFixed(2)} ${_trip?.currency ?? ''}',
+                  trailing: PopupMenuButton<String>(
+                    onSelected: (v) async {
+                      if (v == 'edit') {
+                        await _editExpenseDialog(e);
+                        await _refresh();
+                      } else if (v == 'delete') {
+                        await widget.api.deleteExpense(e.id);
+                        await _refresh();
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'edit', child: Text('Edit')),
+                      PopupMenuItem(value: 'delete', child: Text('Delete')),
+                    ],
                   ),
                 );
               },

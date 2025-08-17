@@ -8,6 +8,8 @@ import '../models/budget.dart';
 import '../models/expense.dart';
 import '../models/trip.dart';
 import 'local_budget_store.dart';
+import 'dart:async';
+import 'local_trip_store.dart';
 
 class _FxCache {
   _FxCache(this.rate, this.ts);
@@ -22,6 +24,7 @@ class ApiService {
   // Auth (set in Auth flow; attached to every request via _headers)
   String? _authToken;
   bool lastBudgetsFromCache = false;
+  bool lastTripsFromCache = false;
 
 // --- FX cache (1h TTL) ---
   final Map<String, _FxCache> _fx = {}; // key: 'FROM_TO'
@@ -80,6 +83,19 @@ class ApiService {
     throw Exception('Failed to load trips (${res.statusCode})');
   }
 
+  Future<List<Trip>> fetchTripsOrCache({Duration timeout = const Duration(seconds: 5)}) async {
+    lastTripsFromCache = false;
+    try {
+      final res = await fetchTrips().timeout(timeout);
+      // ignore: unawaited_futures
+      LocalTripStore.save(res);
+      return res;
+    } catch (_) {
+      lastTripsFromCache = true;
+      return LocalTripStore.load();
+    }
+  }
+
   Future<Trip> createTrip(Trip t) async {
     final res = await http.post(
       Uri.parse('$baseUrl/trips'),
@@ -89,7 +105,27 @@ class ApiService {
     if (res.statusCode == 200 || res.statusCode == 201) {
       return Trip.fromJson(jsonDecode(res.body));
     }
-    throw Exception('Failed to create trip (${res.statusCode})');
+    // include body for easier debugging
+    throw Exception('Failed to create trip (${res.statusCode}) ${res.body}');
+  }
+
+  Future<Trip> updateTrip(Trip t) async {
+    final res = await http.put(
+      Uri.parse('$baseUrl/trips/${t.id}'),
+      headers: _headers(jsonBody: true),
+      body: jsonEncode(t.toJson()),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Failed to update trip (${res.statusCode}) ${res.body}');
+    }
+    return Trip.fromJson(jsonDecode(res.body));
+  }
+
+  Future<void> deleteTrip(String id) async {
+    final res = await http.delete(Uri.parse('$baseUrl/trips/$id'), headers: _headers());
+    if (res.statusCode != 204 && res.statusCode != 200) {
+      throw Exception('Failed to delete trip (${res.statusCode}) ${res.body}');
+    }
   }
 
   // -----------------------------
@@ -116,6 +152,22 @@ class ApiService {
     if (res.statusCode != 200 && res.statusCode != 201) {
       throw Exception('Failed to add expense (${res.statusCode})');
     }
+  }
+
+  Future<void> deleteExpense(String id) async {
+    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: _headers());
+    if (res.statusCode != 204 && res.statusCode != 200) {
+      throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
+    }
+  }
+
+  Future<Expense> updateExpense(Expense e) async {
+    final uri = Uri.parse('$baseUrl/expenses/${e.id}');
+    final res = await http.put(uri, headers: _headers(jsonBody: true), body: jsonEncode(e.toJson()));
+    if (res.statusCode != 200) {
+      throw Exception('Failed to update expense (${res.statusCode}) ${res.body}');
+    }
+    return Expense.fromJson(jsonDecode(res.body));
   }
 
   // -----------------------------

@@ -25,16 +25,26 @@ class ExpenseFormScreen extends StatefulWidget {
 class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   final _title = TextEditingController();
   final _amount = TextEditingController();
+  late List<String> _participants; // safe list used across the form
   String _category = 'Food';
   late String _paidBy;
   late Set<String> _shared;
 
+// expense form initState fix start
   @override
   void initState() {
     super.initState();
-    _paidBy = widget.participants.first;
-    _shared = {...widget.participants};
+    _participants = widget.participants.isNotEmpty
+        ? List<String>.from(widget.participants)
+        : <String>['You'];
+
+    // was: _paidBy = widget.participants.first;
+    // was: _shared = {...widget.participants};
+    _paidBy = _participants.first;    // safe: never empty due to fallback
+    _shared = {..._participants};     // default share with all shown
   }
+// expense form initState fix end
+
 
   void _save() {
     final title = _title.text.trim();
@@ -80,24 +90,28 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
             decoration: const InputDecoration(labelText: 'Category'),
           ),
           const SizedBox(height: 8),
+          // paid-by items from _participants start
           DropdownButtonFormField<String>(
             value: _paidBy,
-            items: widget.participants
+            items: _participants
                 .map((p) => DropdownMenuItem(value: p, child: Text(p)))
                 .toList(),
             onChanged: (v) => setState(() => _paidBy = v ?? _paidBy),
             decoration: const InputDecoration(labelText: 'Paid by'),
           ),
+            // paid-by items from _participants end
           const SizedBox(height: 8),
           const Text('Shared with'),
           const SizedBox(height: 4),
-          ...widget.participants.map((p) => CheckboxListTile(
-                title: Text(p),
-                value: _shared.contains(p),
-                onChanged: (v) => setState(() {
-                  v == true ? _shared.add(p) : _shared.remove(p);
-                }),
-              )),
+          // shared-with list from _participants start
+          ..._participants.map((p) => CheckboxListTile(
+            title: Text(p),
+            value: _shared.contains(p),
+            onChanged: (v) => setState(() {
+              v == true ? _shared.add(p) : _shared.remove(p);
+            }),
+          )),
+          // shared-with list from _participants end
           const SizedBox(height: 12),
           FilledButton.icon(
             onPressed: _save,

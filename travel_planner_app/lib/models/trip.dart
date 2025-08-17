@@ -29,12 +29,16 @@ class Trip {
       );
 
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'startDate': startDate.toIso8601String(),
-        'endDate': endDate.toIso8601String(),
-        'initialBudget': initialBudget,
-        'currency': currency,
-        'participants': participants,
-      };
+    'id': id,
+    'name': name,
+    // send LocalDate strings (yyyy-MM-dd) to match backend TripDTO
+    'startDate': _yyyyMmDd(startDate),
+    'endDate': _yyyyMmDd(endDate),
+    'initialBudget': initialBudget,
+    'currency': currency,
+    'participants': participants,
+  };
+
+  String _yyyyMmDd(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
 }

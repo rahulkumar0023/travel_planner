@@ -4,6 +4,9 @@ import '../models/trip.dart';
 import 'dart:math';
 import '../services/trip_storage_service.dart';
 import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
+// imports patch start
+import '../models/budget.dart'; // for BudgetKind.trip
+// imports patch end
 
 class TripSelectionScreen extends StatefulWidget {
   final ApiService api;
@@ -19,15 +22,18 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
   @override
   void initState() {
     super.initState();
-    _future = widget.api.fetchTrips();
+    _future = widget.api.fetchTripsOrCache();
   }
 
+// _refresh method start
   Future<void> _refresh() async {
+    if (!mounted) return;
     setState(() {
-      _future = widget.api.fetchTrips();
+      _future = widget.api.fetchTripsOrCache();
     });
-    await _future;
+    await _future; // no setState AFTER this await
   }
+// _refresh method end
 
   Future<void> _createTripDialog() async {
     final nameCtrl = TextEditingController();
@@ -85,15 +91,43 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
       ),
     );
 
+// _createTripDialog auto-budget start
     if (created != null) {
       final saved = await widget.api.createTrip(created);
+
+      // NEW: create a Trip Budget tied to this trip so it appears in Budgets
+      try {
+        await widget.api.createBudget(
+          kind: BudgetKind.trip,
+          currency: saved.currency,
+          amount: saved.initialBudget, // can be 0; still creates a row you can edit later
+          tripId: saved.id,
+          name: saved.name,            // nice label in Budgets list
+        );
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Trip budget created')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not create trip budget: $e')),
+          );
+        }
+      }
+
       await TripStorageService.save(saved);
-      setState(() {
-        _future = widget.api.fetchTrips(); // refresh list after creation
-      });
-      if (!mounted) return;
-      Navigator.of(context).pop<Trip>(saved);
+      if (mounted) {
+        setState(() {
+          _future = widget.api.fetchTripsOrCache(); // refresh list after creation
+        });
+        // If you want to stay on this screen, keep this. If you want to jump back, leave as-is.
+        Navigator.of(context).pop<Trip>(saved);
+      }
     }
+// _createTripDialog auto-budget end
+
   }
 
   @override
@@ -130,23 +164,102 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
               ),
             );
           }
-          return RefreshIndicator(
-            onRefresh: _refresh,
-            child: ListView.separated(
-              padding: const EdgeInsets.all(12),
-              itemBuilder: (_, i) {
-                final t = trips[i];
-                return ListTile(
-                  title: Text(t.name),
-                  subtitle: Text(
-                      '${t.currency} • Budget ${t.initialBudget.toStringAsFixed(0)}'),
-                  trailing: const Icon(Icons.chevron_right),
-                  onTap: () => Navigator.of(context).pop<Trip>(t),
-                );
-              },
-              separatorBuilder: (_, __) => const Divider(height: 1),
-              itemCount: trips.length,
-            ),
+
+          final usingCache = widget.api.lastTripsFromCache;
+          return Column(
+            children: [
+              if (usingCache)
+                Container(
+                  margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceVariant,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text('Showing cached trips (offline or server unavailable). Pull to refresh.'),
+                ),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _refresh,
+                  child: ListView.separated(
+                    padding: const EdgeInsets.all(12),
+                    itemBuilder: (_, i) {
+                      final t = trips[i];
+                      return ListTile(
+                        title: Text(t.name),
+                        subtitle: Text('${t.currency} • Budget ${t.initialBudget.toStringAsFixed(0)}'),
+                        // actions menu replaces the chevron
+                        trailing: PopupMenuButton<String>(
+                          // Replace your current onSelected with this guarded version
+                          // Trip row actions (guarded) start
+                          onSelected: (v) async {
+                            if (v == 'edit') {
+                              // TODO: navigate to your edit flow if you have one
+                              // await Navigator.push(context, MaterialPageRoute(builder: (_) => TripFormScreen(trip: t)));
+                              if (!mounted) return; // guard before setState after awaiting
+                              setState(() {
+                                _future = widget.api.fetchTripsOrCache();
+                              });
+                            // delete feedback start
+                            } else if (v == 'delete') {
+                              try {
+                                await widget.api.deleteTrip(t.id);
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Trip deleted')),
+                                );
+                                setState(() { _future = widget.api.fetchTripsOrCache(); });
+                              } catch (e) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Delete failed: $e')),
+                                );
+                              }
+                            } else if (v == 'create_budget') {
+                              // trip row menu handler add-budget start
+                              try {
+                                await widget.api.createBudget(
+                                  kind: BudgetKind.trip,
+                                  currency: t.currency,
+                                  amount: t.initialBudget,
+                                  tripId: t.id,
+                                  name: t.name,
+                                );
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Trip budget created')),
+                                );
+                              } catch (e) {
+                                if (!mounted) return;
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(content: Text('Could not create budget: $e')),
+                                );
+                              }
+                              if (!mounted) return;
+                              setState(() { _future = widget.api.fetchTripsOrCache(); });
+                            }// trip row menu handler add-budget end
+                          // delete feedback end
+
+                          },
+                          // Trip row actions (guarded) end
+                          itemBuilder: (_) => const [
+                            PopupMenuItem(value: 'edit', child: Text('Edit')),
+                            PopupMenuItem(value: 'delete', child: Text('Delete')),
+                            // trip row menu items add-budget start
+                            PopupMenuItem(value: 'create_budget', child: Text('Create budget from trip')),
+                            // trip row menu items add-budget end
+                          ],
+                        ),
+                        // tap still selects and returns the trip
+                        onTap: () => Navigator.of(context).pop<Trip>(t),
+                      );
+                    },
+                    separatorBuilder: (_, __) => const Divider(height: 1),
+                    itemCount: trips.length,
+                  ),
+                ),
+              ),
+            ],
           );
         },
       ),
