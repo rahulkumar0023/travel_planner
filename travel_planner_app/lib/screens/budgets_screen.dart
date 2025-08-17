@@ -318,6 +318,52 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
   }
 
+  // --- money formatting + spent cache ---
+// money formatter (very simple; replace with intl if you want)
+  String _money(String ccy, num v) => '$ccy ${v.toStringAsFixed(0)}';
+
+// Cache: tripId -> spent amount
+  final Map<String, double> _spentByTrip = <String, double>{};
+  final Set<String> _spentLoadedFor = <String>{};
+  bool _loadingSpends = false;
+
+// Schedule a recalc after the current frame (so we don't setState during build)
+  void _scheduleSpendRecalc(List<Budget> all) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _recalcSpends(all);
+    });
+  }
+
+// Recalculate spends for any trip budgets whose tripId we haven't loaded yet
+  Future<void> _recalcSpends(List<Budget> all) async {
+    // collect new tripIds to load
+    final ids = <String>[];
+    for (final b in all) {
+      if (b.kind == BudgetKind.trip && b.tripId != null && !_spentLoadedFor.contains(b.tripId)) {
+        ids.add(b.tripId!);
+      }
+    }
+    if (ids.isEmpty) return;
+
+    setState(() => _loadingSpends = true);
+
+    // fetch each trip's expenses and sum
+    try {
+      await Future.wait(ids.map((id) async {
+        final expenses = await widget.api.fetchExpenses(id);
+        final sum = expenses.fold<double>(0.0, (p, e) => p + (e.amount));
+        _spentByTrip[id] = sum;
+        _spentLoadedFor.add(id);
+      }));
+    } catch (_) {
+      // ignore; UI will just show 0 spent if something fails
+    }
+
+    if (!mounted) return;
+    setState(() => _loadingSpends = false);
+  }
+
+
 // ➌ Convert to a specific currency (used for “linked” ≈ line)
   Future<double?> _approxTo({
     required String from,
@@ -357,6 +403,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
             return Center(child: Text('Failed to load budgets:\n${snap.error}'));
           }
           final all = snap.data ?? const <Budget>[];
+          _scheduleSpendRecalc(all); // budgets = the full list you’re displaying
           final monthly = all.where((b) => b.kind == BudgetKind.monthly).toList();
           final trips   = all.where((b) => b.kind == BudgetKind.trip).toList();
           final usingCache = widget.api.lastBudgetsFromCache;
@@ -388,9 +435,20 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                             ? '${m.name} • ${m.amount.toStringAsFixed(0)} ${m.currency}'
                             : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
                       ),
-                      subtitle: (approx.hasData && _home != m.currency)
-                          ? Text('≈ ${approx.data!.toStringAsFixed(2)} $_home')
-                          : null,
+                      subtitle: Builder(builder: (ctx) {
+                        // find all trip budgets that link to this monthly budget
+                        final linkedTrips = trips.where((tb) => tb.linkedMonthlyBudgetId == m.id);
+                        final spent = linkedTrips.fold<double>(0.0, (p, tb) => p + (_spentByTrip[tb.tripId ?? ''] ?? 0.0));
+                        final remaining = (m.amount) - spent;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Total: ${_money(m.currency, m.amount)}'),
+                            Text('Spent: ${_money(m.currency, spent)}'),
+                            Text('Remaining: ${_money(m.currency, remaining)}'),
+                          ],
+                        );
+                      }),
                       trailing: PopupMenuButton<String>(
                         onSelected: (v) {
                           if (v == 'edit') _editMonthly(m);
@@ -416,45 +474,19 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                   builder: (_, approx) => Card(
                     child: ListTile(
                       title: Text('${t.name ?? 'Trip'} • ${t.amount.toStringAsFixed(0)} ${t.currency}'),
-                      subtitle: FutureBuilder<double?>(
-                        future: () async {
-                          final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly);
-                          if (linked == null) return null;
-                          return _approxTo(
-                            from: t.currency,
-                            to: linked.currency,
-                            amount: t.amount,
-                          );
-                        }(),
-                        builder: (_, linkedApprox) {
-                          final lines = <Widget>[];
+                      subtitle: Builder(builder: (ctx) {
+                        final spent = _spentByTrip[t.tripId ?? ''] ?? 0.0;
+                        final remaining = (t.amount) - spent;
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Total: ${_money(t.currency, t.amount)}'),
+                            Text('Spent: ${_money(t.currency, spent)}'),
+                            Text('Remaining: ${_money(t.currency, remaining)}'),
+                          ],
+                        );
+                      }),
 
-                          // ≈ home line (kept as-is)
-                          if (approx.hasData && _home != t.currency) {
-                            lines.add(Text('≈ ${approx.data!.toStringAsFixed(2)} $_home'));
-                          }
-
-                          // Linked label
-                          lines.add(Text(
-                            _linkedLabel(t.linkedMonthlyBudgetId, monthly),
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ));
-
-                          // ≈ linked monthly currency line
-                          if (linkedApprox.hasData) {
-                            final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly)!;
-                            lines.add(Text(
-                              '≈ ${linkedApprox.data!.toStringAsFixed(2)} ${linked.currency} (linked)',
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ));
-                          }
-
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: lines,
-                          );
-                        },
-                      ),
                       trailing: PopupMenuButton<String>(
                         onSelected: (v) {
                           if (v == 'link') _linkTripToMonthly(t, monthly);
