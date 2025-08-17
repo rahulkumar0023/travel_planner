@@ -1,18 +1,23 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:travel_planner_app/services/hive_migrations.dart';
 import 'models/expense.dart';
 import 'screens/app_shell.dart';
 import 'services/api_service.dart';
 import 'services/trip_storage_service.dart';
+import 'services/hive_migrations.dart';
+
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
   // Hive init for offline expenses
   await Hive.initFlutter();
+  // After Hive.initFlutter() + registerAdapter() + openBox(...)
+
   Hive.registerAdapter(ExpenseAdapter());
   await Hive.openBox<Expense>('expensesBox');
-
+  await HiveMigrations.backfillExpenseCurrency();
   // Trip storage init
   await TripStorageService.init();
 

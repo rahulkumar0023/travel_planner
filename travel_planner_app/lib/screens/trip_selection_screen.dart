@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../models/trip.dart';
 import 'dart:math';
+import '../services/local_trip_store.dart';
 import '../services/trip_storage_service.dart';
 import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
 // imports patch start
@@ -37,6 +38,7 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
 
   Future<void> _createTripDialog() async {
     final nameCtrl = TextEditingController();
+    final extraCcyCtrl = TextEditingController(text: 'TRY,INR'); // example default
     final budgetCtrl = TextEditingController(text: '1000');
     //final currencyCtrl = TextEditingController(text: 'EUR');
 
@@ -65,6 +67,15 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
                   .toList(),
               onChanged: (v) => selectedCcy = (v ?? 'EUR'),
             ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: extraCcyCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Extra currencies (comma separated)',
+                hintText: 'e.g. TRY, INR',
+              ),
+              textCapitalization: TextCapitalization.characters,
+            ),
           ],
         ),
         actions: [
@@ -74,14 +85,25 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
             onPressed: () {
               if (nameCtrl.text.trim().isEmpty) return;
               final id = 'trip_${Random().nextInt(999999)}';
+              // collect extras from the text field: "TRY,INR" -> ["TRY","INR"]
+              final extras = extraCcyCtrl.text
+                  .split(',')
+                  .map((s) => s.trim().toUpperCase())
+                  .where((s) => s.isNotEmpty)
+                  .toSet()
+                  .toList();
+
+              // ensure base currency is included
+              final spendCurrencies = <String>{ selectedCcy, ...extras }.toList();
               final trip = Trip(
                 id: id,
                 name: nameCtrl.text.trim(),
                 startDate: DateTime.now(),
                 endDate: DateTime.now().add(const Duration(days: 3)),
                 initialBudget: double.tryParse(budgetCtrl.text.trim()) ?? 0,
-                currency: selectedCcy, // <- from dropdown, guaranteed ISO code
+                currency: selectedCcy,          // base/home currency
                 participants: const [],
+                spendCurrencies: spendCurrencies, // <-- NEW: attach choices
               );
               Navigator.pop(ctx, trip);
             },
@@ -97,13 +119,15 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
 
       // NEW: create a Trip Budget tied to this trip so it appears in Budgets
       try {
-        await widget.api.createBudget(
-          kind: BudgetKind.trip,
-          currency: saved.currency,
-          amount: saved.initialBudget, // can be 0; still creates a row you can edit later
-          tripId: saved.id,
-          name: saved.name,            // nice label in Budgets list
-        );
+        if (saved.initialBudget > 0) {
+          await widget.api.createBudget(
+            kind: BudgetKind.trip,
+            currency: saved.currency,
+            amount: saved.initialBudget,
+            tripId: saved.id,
+            name: saved.name,
+          );
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Trip budget created')),
@@ -204,10 +228,23 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
                             } else if (v == 'delete') {
                               try {
                                 await widget.api.deleteTrip(t.id);
+
+                                // 1) clear the active/saved trip if it's the one we deleted
+                                await TripStorageService.clearIf(t.id);
+
+                                // 2) (optional) prune cached trips list so UI never shows this trip offline
+                                try {
+                                  final trips = await LocalTripStore.load();
+                                  final pruned = trips.where((x) => x.id != t.id).toList();
+                                  await LocalTripStore.save(pruned);
+                                } catch (_) {}
+
                                 if (!mounted) return;
                                 ScaffoldMessenger.of(context).showSnackBar(
                                   const SnackBar(content: Text('Trip deleted')),
                                 );
+
+                                // 3) refresh the list from server or cache
                                 setState(() { _future = widget.api.fetchTripsOrCache(); });
                               } catch (e) {
                                 if (!mounted) return;
@@ -215,7 +252,8 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
                                   SnackBar(content: Text('Delete failed: $e')),
                                 );
                               }
-                            } else if (v == 'create_budget') {
+                            }
+                            else if (v == 'create_budget') {
                               // trip row menu handler add-budget start
                               try {
                                 await widget.api.createBudget(
@@ -264,6 +302,7 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
         },
       ),
       floatingActionButton: FloatingActionButton.extended(
+        heroTag: 'fab-trip-selection', // <-- add this line
         onPressed: _createTripDialog,
         icon: const Icon(Icons.add),
         label: const Text('New Trip'),

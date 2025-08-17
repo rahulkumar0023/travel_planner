@@ -1,5 +1,6 @@
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/trip.dart';
+import 'local_trip_store.dart'; // + so we can read all cached trips
 
 class TripStorageService {
   static late SharedPreferences _prefs;
@@ -26,6 +27,37 @@ class TripStorageService {
     await _prefs.setString(_keyCurrency, trip.currency);
   }
 
+  // TripStorageService.loadAll method start
+  /// Load all locally cached trips (used by data migrations/backfills).
+  /// Returns [] if none are cached.
+  static Future<List<Trip>> loadAll() async {
+    try {
+      return await LocalTripStore.load();
+    } catch (_) {
+      return <Trip>[];
+    }
+  }
+// TripStorageService.loadAll method end
+
+  // TripStorageService clear helpers start
+  static Future<void> clear() async {
+    // whatever you used in save(), remove it here
+    // e.g., SharedPreferences:
+    final p = await SharedPreferences.getInstance();
+    await p.remove('active_trip_json');    // <-- match your existing key
+    await p.remove('active_trip_id');      // if you store id separately
+  }
+
+  /// Clear only if the currently saved trip id matches [tripId]
+  static Future<void> clearIf(String tripId) async {
+    final active = loadLightweight();
+    if (active != null && active.id == tripId) {
+      await clear();
+    }
+  }
+// TripStorageService clear helpers end
+
+
   static Trip? loadLightweight() {
     final id = _prefs.getString(_keyId);
     final name = _prefs.getString(_keyName);
@@ -42,9 +74,9 @@ class TripStorageService {
     );
   }
 
-  static Future<void> clear() async {
-    await _prefs.remove(_keyId);
-    await _prefs.remove(_keyName);
-    await _prefs.remove(_keyCurrency);
-  }
+  // static Future<void> clear() async {
+  //   await _prefs.remove(_keyId);
+  //   await _prefs.remove(_keyName);
+  //   await _prefs.remove(_keyCurrency);
+  // }
 }

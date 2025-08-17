@@ -154,13 +154,6 @@ class ApiService {
     }
   }
 
-  Future<void> deleteExpense(String id) async {
-    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: _headers());
-    if (res.statusCode != 204 && res.statusCode != 200) {
-      throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
-    }
-  }
-
   Future<Expense> updateExpense(Expense e) async {
     final uri = Uri.parse('$baseUrl/expenses/${e.id}');
     final res = await http.put(uri, headers: _headers(jsonBody: true), body: jsonEncode(e.toJson()));
@@ -169,6 +162,15 @@ class ApiService {
     }
     return Expense.fromJson(jsonDecode(res.body));
   }
+
+
+  Future<void> deleteExpense(String id) async {
+    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: _headers());
+    if (res.statusCode != 204 && res.statusCode != 200) {
+      throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
+    }
+  }
+
 
   // -----------------------------
   // Balances + Settle Up

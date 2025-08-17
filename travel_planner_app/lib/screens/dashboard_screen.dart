@@ -14,6 +14,8 @@ import 'expense_form_screen.dart';
 import 'group_balance_screen.dart';
 import 'participants_screen.dart';
 import 'settings_screen.dart';
+import '../models/budget.dart';          // + for BudgetKind, Budget
+import 'budgets_screen.dart';            // + for quick CTA navigation
 
 class DashboardScreen extends StatefulWidget {
   final Trip? activeTrip;
@@ -37,12 +39,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
   String? _homeCurrencyCode;
   double? _approxHomeValue;
 
+  double? _tripBudgetOverride; // filled if we detect a matching Trip budget
+
   @override
   void initState() {
     super.initState();
     _box = Hive.box<Expense>('expensesBox');
     _loadLocal();
     _updateApproxHome();
+    _loadTripBudgetOverride(); // ← add this line
   }
 
   double get _totalSpent =>
@@ -81,24 +86,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
-
-  Future<void> _addExpenseQuick() async {
+  Future<void> _loadTripBudgetOverride() async {
     final t = widget.activeTrip;
     if (t == null) return;
-
-    final e = Expense(
-      id: DateTime.now().toIso8601String(),
-      tripId: t.id,
-      title: 'Coffee',
-      amount: 3.5,
-      category: 'Food',
-      date: DateTime.now(),
-      paidBy: 'You',
-      sharedWith: const ['You'],
-    );
-    await _box.add(e);
-    _loadLocal();
-    _updateApproxHome();
+    try {
+      final all = await widget.api.fetchBudgetsOrCache();
+      Budget? match;
+      for (final b in all) {
+        if (b.kind == BudgetKind.trip &&
+            ((b.tripId != null && b.tripId == t.id) ||
+                ((b.name ?? '').toLowerCase() == t.name.toLowerCase()))) {
+          match = b;
+          break;
+        }
+      }
+      if (!mounted) return;
+      setState(() => _tripBudgetOverride = match?.amount);
+    } catch (_) {
+      // Ignore errors; we’ll just keep using Trip.initialBudget
+    }
   }
 
   Future<void> _clearTripSelection() async {
@@ -125,6 +131,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             required String category,
             required String paidBy,
             required List<String> sharedWith,
+            required String currency, // <-- new param
           }) async {
             final e = Expense(
               id: DateTime.now().toIso8601String(),
@@ -135,6 +142,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               date: DateTime.now(),
               paidBy: paidBy,
               sharedWith: sharedWith,
+              currency : currency, // <-- new param
             );
             await _box.add(e); // local first (Hive)
             setState(() => _expenses.insert(0, e));
@@ -151,6 +159,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (oldWidget.activeTrip?.id != widget.activeTrip?.id) {
       _loadLocal();
       _updateApproxHome();
+      _loadTripBudgetOverride(); // ← add this line
     }
   }
 
@@ -246,14 +255,60 @@ class _DashboardScreenState extends State<DashboardScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                      'Budget: ${t.initialBudget.toStringAsFixed(0)} ${t.currency}'),
-                  Text('Spent: ${spent.toStringAsFixed(2)} ${t.currency}'),
-                  Text(
-                      'Remaining: ${remaining.toStringAsFixed(2)} ${t.currency}'),
-                  if (_approxHomeValue != null && _homeCurrencyCode != null)
-                    Text(
-                        '≈ ${_approxHomeValue!.toStringAsFixed(2)} $_homeCurrencyCode'),
+                  Builder(builder: (context) {
+                    // assumes you already added:
+                    // - double? _tripBudgetOverride;
+                    // - double _totalSpent; (your existing spent computation)
+                    // - double? _approxHomeValue; String? _homeCurrencyCode; (optional approx line)
+                    // - import 'budgets_screen.dart';
+                    final t = widget.activeTrip!;
+                    final budget = (_tripBudgetOverride ?? t.initialBudget);
+                    final hasBudget = budget > 0;
+                    final spent = _totalSpent;
+                    final remainingRaw = budget - spent;
+                    final remaining = remainingRaw < 0 ? 0 : remainingRaw; // clamp to 0
+                    final overBy = remainingRaw < 0 ? -remainingRaw : 0;
+
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          hasBudget
+                              ? 'Budget: ${budget.toStringAsFixed(0)} ${t.currency}'
+                              : 'Budget: Not set',
+                          style: Theme.of(context).textTheme.titleMedium,
+                        ),
+                        const SizedBox(height: 4),
+                        Text('Spent: ${spent.toStringAsFixed(2)} ${t.currency}'),
+                        if (hasBudget) ...[
+                          Text('Remaining: ${remaining.toStringAsFixed(2)} ${t.currency}'),
+                          if (overBy > 0)
+                            Text(
+                              'Over by: ${overBy.toStringAsFixed(2)} ${t.currency}',
+                              style: TextStyle(color: Theme.of(context).colorScheme.error),
+                            ),
+                        ] else ...[
+                          const SizedBox(height: 8),
+                          FilledButton.icon(
+                            icon: const Icon(Icons.savings_outlined),
+                            label: const Text('Set trip budget'),
+                            onPressed: () async {
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => BudgetsScreen(api: widget.api)),
+                              );
+                              if (!mounted) return;
+                              _loadTripBudgetOverride(); // refetch after returning
+                            },
+                          ),
+                        ],
+                        if (_approxHomeValue != null && _homeCurrencyCode != null) ...[
+                          const SizedBox(height: 8),
+                          Text('≈ ${_approxHomeValue!.toStringAsFixed(2)} $_homeCurrencyCode'),
+                        ],
+                      ],
+                    );
+                  }),
+
                 ],
               ),
             ),

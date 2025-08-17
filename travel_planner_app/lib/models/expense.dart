@@ -19,6 +19,8 @@ class Expense extends HiveObject {
   String paidBy;
   @HiveField(7)
   List<String> sharedWith;
+  @HiveField(8)
+  String currency; // <-- add
 
   Expense({
     required this.id,
@@ -29,27 +31,32 @@ class Expense extends HiveObject {
     required this.date,
     required this.paidBy,
     required this.sharedWith,
+    required this.currency, // <-- add
   });
 
-  factory Expense.fromJson(Map<String, dynamic> json) => Expense(
-        id: json['id'],
-        tripId: json['tripId'],
-        title: json['title'],
-        amount: (json['amount'] ?? 0).toDouble(),
-        category: json['category'],
-        date: DateTime.parse(json['date']),
-        paidBy: json['paidBy'] ?? '',
-        sharedWith: (json['sharedWith'] as List?)?.cast<String>() ?? const [],
-      );
+// fromJson
+  factory Expense.fromJson(Map<String, dynamic> j) => Expense(
+    id: j['id'] as String,
+    tripId: j['tripId'] as String,
+    title: j['title'] as String,
+    amount: (j['amount'] as num).toDouble(),
+    category: j['category'] as String,
+    date: DateTime.parse(j['date'] as String),
+    paidBy: j['paidBy'] as String,
+    sharedWith: (j['sharedWith'] as List).cast<String>(),
+    currency: (j['currency'] as String).toUpperCase(), // <-- add
+  );
 
+// toJson
   Map<String, dynamic> toJson() => {
-        'id': id,
-        'tripId': tripId,
-        'title': title,
-        'amount': amount,
-        'category': category,
-        'date': date.toIso8601String(),
-        'paidBy': paidBy,
-        'sharedWith': sharedWith,
-      };
+    'id': id,
+    'tripId': tripId,
+    'title': title,
+    'amount': amount,
+    'category': category,
+    'date': date.toIso8601String(),
+    'paidBy': paidBy,
+    'sharedWith': sharedWith,
+    'currency': currency, // <-- add
+  };
 }

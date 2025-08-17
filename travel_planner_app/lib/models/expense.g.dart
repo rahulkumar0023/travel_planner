@@ -25,13 +25,14 @@ class ExpenseAdapter extends TypeAdapter<Expense> {
       date: fields[5] as DateTime,
       paidBy: fields[6] as String,
       sharedWith: (fields[7] as List).cast<String>(),
+      currency: fields[8] as String,
     );
   }
 
   @override
   void write(BinaryWriter writer, Expense obj) {
     writer
-      ..writeByte(8)
+      ..writeByte(9)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -47,7 +48,9 @@ class ExpenseAdapter extends TypeAdapter<Expense> {
       ..writeByte(6)
       ..write(obj.paidBy)
       ..writeByte(7)
-      ..write(obj.sharedWith);
+      ..write(obj.sharedWith)
+      ..writeByte(8)
+      ..write(obj.currency);
   }
 
   @override

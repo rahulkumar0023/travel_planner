@@ -66,6 +66,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         date: e.date,
         paidBy: paidBy.text.trim(),
         sharedWith: e.sharedWith,
+        currency: e.currency
+
       );
       await widget.api.updateExpense(updated);
     }

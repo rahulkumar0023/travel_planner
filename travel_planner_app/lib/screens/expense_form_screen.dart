@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../services/trip_storage_service.dart';
+
 class ExpenseFormScreen extends StatefulWidget {
   const ExpenseFormScreen({
     super.key,
@@ -15,8 +17,10 @@ class ExpenseFormScreen extends StatefulWidget {
     required String category,
     required String paidBy,
     required List<String> sharedWith,
+    required String currency,        // <-- add this line
   }) onSubmit;
   final String? defaultCurrency;
+
 
   @override
   State<ExpenseFormScreen> createState() => _ExpenseFormScreenState();
@@ -26,6 +30,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   final _title = TextEditingController();
   final _amount = TextEditingController();
   late List<String> _participants; // safe list used across the form
+  late String _expenseCurrency;
   String _category = 'Food';
   late String _paidBy;
   late Set<String> _shared;
@@ -42,6 +47,10 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     // was: _shared = {...widget.participants};
     _paidBy = _participants.first;    // safe: never empty due to fallback
     _shared = {..._participants};     // default share with all shown
+
+    final trip = TripStorageService.loadLightweight();
+    _expenseCurrency = (widget.defaultCurrency ?? trip?.currency ?? 'EUR').toUpperCase();
+
   }
 // expense form initState fix end
 
@@ -56,6 +65,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
       category: _category,
       paidBy: _paidBy,
       sharedWith: _shared.toList(),
+      currency: _expenseCurrency, // <-- pass the chosen currency
     );
     Navigator.pop(context);
   }
@@ -63,6 +73,13 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   @override
   Widget build(BuildContext context) {
     final ccy = widget.defaultCurrency ?? '';
+    final trip = TripStorageService.loadLightweight();
+    final extras = (trip?.spendCurrencies ?? const <String>[]);
+    final currencyChoices = <String>{ if (trip != null) trip.currency, ...extras }.toList()..sort();
+    // Do NOT mutate state here. Derive a safe selected value:
+    final selectedCurrency = currencyChoices.contains(_expenseCurrency)
+        ? _expenseCurrency
+        : ((widget.defaultCurrency ?? trip?.currency ?? 'EUR').toUpperCase());
     return Scaffold(
       appBar: AppBar(title: const Text('Add Expense')),
       body: ListView(
@@ -77,7 +94,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           TextField(
             controller: _amount,
             decoration: InputDecoration(
-                labelText: 'Amount ${ccy.isEmpty ? '' : '($ccy)'}'),
+                labelText: 'Amount ${selectedCurrency}'),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
           ),
           const SizedBox(height: 8),
@@ -100,6 +117,20 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
             decoration: const InputDecoration(labelText: 'Paid by'),
           ),
             // paid-by items from _participants end
+
+          // Currency field start
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            value: selectedCurrency, // make sure you have: late String _expenseCurrency; in State
+            decoration: const InputDecoration(labelText: 'Currency'),
+            onChanged: (v) => setState(() => _expenseCurrency = (v ?? _expenseCurrency)),
+            // <-- THIS is the line you replace with the items patch above
+            items: currencyChoices
+                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                .toList(),
+          ),
+          // Currency field end
+
           const SizedBox(height: 8),
           const Text('Shared with'),
           const SizedBox(height: 4),

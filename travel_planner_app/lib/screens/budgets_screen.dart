@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import '../models/trip.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
+import '../services/fx_service.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -15,18 +17,63 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   late Future<List<Budget>> _future;
   String _home = TripStorageService.getHomeCurrency();
 
+  // Budgets knownTripIds fields start
+  final Map<String, double> _spentByTrip = {};      // (already present in your file)
+  final Set<String> _spentLoadedFor = <String>{};   // (already present)
+  Set<String> _knownTripIds = <String>{};           // NEW
+  bool _loadingSpends = false;                      // (already present)
+// Budgets knownTripIds fields end
+
+
   @override
   void initState() {
     super.initState();
     _future = widget.api.fetchBudgetsOrCache();
+    _loadTripIds();
   }
 
+// Budgets _refresh sync start
   Future<void> _refresh() async {
-    setState(() {                       // ✅ no return value -> synchronous
+    setState(() { _loadingSpends = true; });
+
+    // 1) load known trips (server first, fallback inside the helper if you use it)
+    List<Trip> trips = <Trip>[];
+    try {
+      trips = await widget.api.fetchTripsOrCache();  // requires LocalTripStore; else use fetchTrips()
+    } catch (_) {}
+    _knownTripIds = trips.map((t) => t.id).toSet();
+
+    // 2) reload budgets
+    setState(() {
       _future = widget.api.fetchBudgetsOrCache();
     });
-    await _future;
+    final budgets = await _future;
+
+    // 3) clear spent caches for any removed trip
+    _spentByTrip.removeWhere((tripId, _) => !_knownTripIds.contains(tripId));
+    _spentLoadedFor.removeWhere((tripId) => !_knownTripIds.contains(tripId));
+
+    // 4) recalc spends for the remaining visible budgets
+    await _recalcSpends(budgets);
+
+    if (!mounted) return;
+    setState(() { _loadingSpends = false; });
   }
+// Budgets _refresh sync end
+
+// _loadTripIds method start
+  Future<void> _loadTripIds() async {
+    try {
+      final trips = await widget.api.fetchTripsOrCache();
+      _knownTripIds
+        ..clear()
+        ..addAll(trips.map((t) => t.id));
+      if (mounted) setState(() {}); // let the filter re-run
+    } catch (_) {
+      // ignore; if trips can't be loaded, we just won't filter by ids yet
+    }
+  }
+// _loadTripIds method end
 
   Future<void> _createMonthlyDialog() async {
     final now = DateTime.now();
@@ -296,7 +343,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     );
   }
 
-  // ➊ Find a monthly by id
+// _monthlyById + _linkedLabel methods start
   Budget? _monthlyById(String? id, List<Budget> monthly) {
     if (id == null) return null;
     for (final m in monthly) {
@@ -305,13 +352,32 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     return null;
   }
 
-// ➋ Build a friendly label for a linked monthly
-  String _linkedLabel(String? monthlyId, List<Budget> monthly) {
-    final m = _monthlyById(monthlyId, monthly);
+  /// Human-friendly label for the linked monthly budget.
+  /// Examples:
+  ///  - "Not linked"
+  ///  - "Linked to Oct 2025 Budget (EUR)"
+  String _linkedLabel(String? linkedMonthlyBudgetId, List<Budget> monthly) {
+    final m = _monthlyById(linkedMonthlyBudgetId, monthly);
     if (m == null) return 'Not linked';
-    final yyMm = '${m.year}-${(m.month ?? 0).toString().padLeft(2, '0')}';
-    return 'Linked → ${ (m.name?.isNotEmpty == true) ? m.name! : yyMm }';
+    // If you store month=1..12 and year like in the model:
+    final mm = (m.month ?? 0);
+    final yy = (m.year ?? 0);
+    final monthNames = const [
+      '', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
+    ];
+    final when = (mm >= 1 && mm <= 12 && yy > 0) ? '${monthNames[mm]} $yy' : (m.name ?? 'Monthly');
+    return 'Linked to $when Budget (${m.currency})';
   }
+// _monthlyById + _linkedLabel methods end
+
+
+// // ➋ Build a friendly label for a linked monthly
+//   String _linkedLabel(String? monthlyId, List<Budget> monthly) {
+//     final m = _monthlyById(monthlyId, monthly);
+//     if (m == null) return 'Not linked';
+//     final yyMm = '${m.year}-${(m.month ?? 0).toString().padLeft(2, '0')}';
+//     return 'Linked → ${ (m.name?.isNotEmpty == true) ? m.name! : yyMm }';
+//   }
 
   void _showSnack(String msg) {
     if (!mounted) return;
@@ -322,10 +388,10 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 // money formatter (very simple; replace with intl if you want)
   String _money(String ccy, num v) => '$ccy ${v.toStringAsFixed(0)}';
 
-// Cache: tripId -> spent amount
-  final Map<String, double> _spentByTrip = <String, double>{};
-  final Set<String> _spentLoadedFor = <String>{};
-  bool _loadingSpends = false;
+// // Cache: tripId -> spent amount
+//   final Map<String, double> _spentByTrip = <String, double>{};
+//   final Set<String> _spentLoadedFor = <String>{};
+//   bool _loadingSpends = false;
 
 // Schedule a recalc after the current frame (so we don't setState during build)
   void _scheduleSpendRecalc(List<Budget> all) {
@@ -334,12 +400,15 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     });
   }
 
+// _recalcSpends with FX start
 // Recalculate spends for any trip budgets whose tripId we haven't loaded yet
   Future<void> _recalcSpends(List<Budget> all) async {
     // collect new tripIds to load
     final ids = <String>[];
     for (final b in all) {
-      if (b.kind == BudgetKind.trip && b.tripId != null && !_spentLoadedFor.contains(b.tripId)) {
+      if (b.kind == BudgetKind.trip &&
+          b.tripId != null &&
+          !_spentLoadedFor.contains(b.tripId)) {
         ids.add(b.tripId!);
       }
     }
@@ -347,11 +416,43 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
     setState(() => _loadingSpends = true);
 
-    // fetch each trip's expenses and sum
     try {
       await Future.wait(ids.map((id) async {
+        // 1) find the trip budget for this tripId so we know the budget currency
+        Budget? tripBudget;
+        for (final cand in all) {
+          if (cand.kind == BudgetKind.trip && cand.tripId == id) {
+            tripBudget = cand;
+            break;
+          }
+        }
+        if (tripBudget == null) {
+          // nothing to sum into (shouldn't happen), mark as loaded w/ zero
+          _spentByTrip[id] = 0.0;
+          _spentLoadedFor.add(id);
+          return;
+        }
+
+        // 2) fetch expenses for this trip
         final expenses = await widget.api.fetchExpenses(id);
-        final sum = expenses.fold<double>(0.0, (p, e) => p + (e.amount));
+
+        // 3) load FX table for the target (budget) currency
+        final rates = await FxService.loadRates(tripBudget.currency);
+
+        // 4) sum after converting each expense amount to the budget currency
+        double sum = 0.0;
+        for (final e in expenses) {
+          final fromCcy = (e.currency == null || e.currency.isEmpty)
+              ? tripBudget.currency
+              : e.currency; // fallback for legacy rows
+          sum += FxService.convert(
+            amount: e.amount,
+            from: fromCcy,
+            to: tripBudget.currency,
+            ratesForBaseTo: rates,
+          );
+        }
+
         _spentByTrip[id] = sum;
         _spentLoadedFor.add(id);
       }));
@@ -362,6 +463,10 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     if (!mounted) return;
     setState(() => _loadingSpends = false);
   }
+// _recalcSpends with FX end
+
+
+
 
 
 // ➌ Convert to a specific currency (used for “linked” ≈ line)
@@ -404,8 +509,19 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
           }
           final all = snap.data ?? const <Budget>[];
           _scheduleSpendRecalc(all); // budgets = the full list you’re displaying
-          final monthly = all.where((b) => b.kind == BudgetKind.monthly).toList();
-          final trips   = all.where((b) => b.kind == BudgetKind.trip).toList();
+          // Budgets filter orphan start
+// Keep all monthly budgets, but only keep trip budgets if we know their trip still exists
+          final filtered = all.where((b) {
+            if (b.kind != BudgetKind.trip) return true;     // keep monthly
+            if (b.tripId == null) return false;             // malformed, hide
+            return _knownTripIds.contains(b.tripId!);       // only show if the trip still exists
+          }).toList();
+
+// From here on, use 'filtered' instead of 'all'
+          final monthly = filtered.where((b) => b.kind == BudgetKind.monthly).toList();
+          final trips   = filtered.where((b) => b.kind == BudgetKind.trip).toList();
+// Budgets filter orphan end
+
           final usingCache = widget.api.lastBudgetsFromCache;
 
           return ListView(
@@ -474,18 +590,62 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                   builder: (_, approx) => Card(
                     child: ListTile(
                       title: Text('${t.name ?? 'Trip'} • ${t.amount.toStringAsFixed(0)} ${t.currency}'),
-                      subtitle: Builder(builder: (ctx) {
-                        final spent = _spentByTrip[t.tripId ?? ''] ?? 0.0;
-                        final remaining = (t.amount) - spent;
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
+                      // Trip budget subtitle patch start
+                      subtitle: FutureBuilder<double?>(
+                        // compute ≈ of the trip-budget amount in the linked monthly currency (if any)
+                        future: () async {
+                          final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly);
+                          if (linked == null) return null;
+                          // If you already have _approxTo(from:, to:, amount:), use it. Otherwise see note below.
+                          return _approxTo(from: t.currency, to: linked.currency, amount: t.amount);
+                        }(),
+                        builder: (_, linkedApprox) {
+                          final spent = _spentByTrip[t.tripId ?? ''] ?? 0.0;
+                          final remaining = (t.amount) - spent;
+
+                          final lines = <Widget>[
+                            // your existing totals
                             Text('Total: ${_money(t.currency, t.amount)}'),
                             Text('Spent: ${_money(t.currency, spent)}'),
                             Text('Remaining: ${_money(t.currency, remaining)}'),
-                          ],
-                        );
-                      }),
+                            const SizedBox(height: 4),
+
+                            // Linked label (always show, even before future resolves)
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const Icon(Icons.link, size: 14),
+                                const SizedBox(width: 4),
+                                Flexible(
+                                  child: Text(
+                                    _linkedLabel(t.linkedMonthlyBudgetId, monthly),
+                                    style: Theme.of(context).textTheme.bodySmall,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ];
+
+                          // ≈ linked monthly currency line (only when linked and computed)
+                          if (linkedApprox.hasData) {
+                            final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly)!;
+                            lines.add(
+                              Text(
+                                '≈ ${linkedApprox.data!.toStringAsFixed(2)} ${linked.currency} (linked)',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            );
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: lines,
+                          );
+                        },
+                      ),
+// Trip budget subtitle patch end
+
 
                       trailing: PopupMenuButton<String>(
                         onSelected: (v) {
@@ -518,12 +678,14 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         mainAxisSize: MainAxisSize.min,
         children: [
           FloatingActionButton.extended(
+            heroTag: 'fab-new-monthly', // <-- add
             onPressed: _createMonthlyDialog,
             label: const Text('New Monthly'),
             icon: const Icon(Icons.calendar_today),
           ),
           const SizedBox(height: 12),
           FloatingActionButton.extended(
+            heroTag: 'fab-new-trip', // <-- add
             onPressed: _createTripDialog,
             label: const Text('New Trip'),
             icon: const Icon(Icons.flight),

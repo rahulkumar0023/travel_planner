@@ -6,37 +6,39 @@ class Trip {
   final double initialBudget;
   final String currency;
   final List<String> participants;
+  final List<String> spendCurrencies;
 
   Trip({
     required this.id,
     required this.name,
     required this.startDate,
     required this.endDate,
-    required this.initialBudget,
     required this.currency,
+    required this.initialBudget,
     required this.participants,
+    this.spendCurrencies = const [], // <-- add default
   });
 
-  factory Trip.fromJson(Map<String, dynamic> json) => Trip(
-        id: json['id'],
-        name: json['name'],
-        startDate: DateTime.parse(json['startDate']),
-        endDate: DateTime.parse(json['endDate']),
-        initialBudget: (json['initialBudget'] ?? 0).toDouble(),
-        currency: json['currency'],
-        participants:
-            (json['participants'] as List?)?.cast<String>() ?? const [],
-      );
+  factory Trip.fromJson(Map<String, dynamic> j) => Trip(
+    id: j['id'] as String,
+    name: j['name'] as String,
+    startDate: DateTime.parse(j['startDate'] as String),
+    endDate: DateTime.parse(j['endDate'] as String),
+    currency: (j['currency'] as String).toUpperCase(),
+    initialBudget: (j['initialBudget'] as num).toDouble(),
+    participants: (j['participants'] as List).cast<String>(),
+    spendCurrencies: (j['spendCurrencies'] as List? ?? const []).cast<String>().map((e)=>e.toUpperCase()).toList(),
+  );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'name': name,
-    // send LocalDate strings (yyyy-MM-dd) to match backend TripDTO
     'startDate': _yyyyMmDd(startDate),
     'endDate': _yyyyMmDd(endDate),
-    'initialBudget': initialBudget,
     'currency': currency,
+    'initialBudget': initialBudget,
     'participants': participants,
+    'spendCurrencies': spendCurrencies,
   };
 
   String _yyyyMmDd(DateTime d) =>
