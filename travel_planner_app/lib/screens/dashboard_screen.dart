@@ -18,7 +18,8 @@ import 'group_balance_screen.dart';
 import 'participants_screen.dart';
 import 'settings_screen.dart';
 import 'budgets_screen.dart';
-import 'trip_selection_screen.dart';        // <-- keep
+import 'trip_selection_screen.dart';
+import '../services/budgets_sync.dart';      // <-- keep
 // imports patch end
 
 
@@ -37,6 +38,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  late final VoidCallback _budgetsListener;
 
   double _spentInTripCcy = 0.0;
   bool _recalcInFlight = false; // just to avoid overlapping recalcs
@@ -55,8 +57,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     super.initState();
     _box = Hive.box<Expense>('expensesBox');
     _boot(); // 👈 NEW
-    // _updateApproxHome();
-    // _loadTripBudgetOverride();
+
+    _budgetsListener = () async {
+      if (!mounted) return;
+      await _loadTripBudgetOverride();    // re-pulls the linked/synthesized budget
+      // (spent/home don’t depend on budgets, so no need to recalc here)
+    };
+    BudgetsSync.version.addListener(_budgetsListener);
+// budgets listener end
+
   }
 // initState patch end
 
@@ -308,6 +317,15 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+
+
+  // dispose override start
+  @override
+  void dispose() {
+    BudgetsSync.version.removeListener(_budgetsListener);
+    super.dispose();
+  }
+// dispose override end
 
 
   @override

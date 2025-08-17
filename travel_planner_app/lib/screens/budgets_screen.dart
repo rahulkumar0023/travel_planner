@@ -4,6 +4,7 @@ import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
 import '../services/fx_service.dart';
+import '../services/budgets_sync.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -48,6 +49,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       _future = widget.api.fetchBudgetsOrCache();
     });
     final budgets = await _future;
+    // 👇 NEW: tell others budgets changed/refreshed
+    BudgetsSync.bump();
 
     // 3) clear spent caches for any removed trip
     _spentByTrip.removeWhere((tripId, _) => !_knownTripIds.contains(tripId));
@@ -130,6 +133,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
       );
       await _refresh();
+      BudgetsSync.bump();
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Monthly budget created')),
@@ -192,7 +196,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
         // 4) Refresh list
         await _refresh();
-
+        BudgetsSync.bump();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Trip budget created')),
@@ -248,6 +252,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
       );
       await _refresh();
+      BudgetsSync.bump();
       _showSnack('Monthly budget updated');
     } catch (e) {
       _showSnack('Could not update: $e');
@@ -287,6 +292,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         linkedMonthlyBudgetId: t.linkedMonthlyBudgetId,
       );
       await _refresh();
+      BudgetsSync.bump();
       _showSnack('Trip budget updated');
     } catch (e) {
       _showSnack('Could not update: $e');
@@ -308,7 +314,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     if (ok != true) return;
     try {
       await widget.api.deleteBudget(b.id);
-      await _refresh();
+      await _refresh(); BudgetsSync.bump();
       _showSnack('Budget deleted');
     } catch (e) {
       _showSnack('Could not delete: $e');
@@ -318,7 +324,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   Future<void> _unlinkTrip(Budget t) async {
     try {
       await widget.api.unlinkTripBudget(tripBudgetId: t.id);
-      await _refresh();
+      await _refresh(); BudgetsSync.bump();
       _showSnack('Unlinked from monthly');
     } catch (e) {
       _showSnack('Could not unlink: $e');
