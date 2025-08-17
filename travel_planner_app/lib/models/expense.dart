@@ -34,18 +34,18 @@ class Expense extends HiveObject {
     required this.currency, // <-- add
   });
 
-// fromJson
-  factory Expense.fromJson(Map<String, dynamic> j) => Expense(
-    id: j['id'] as String,
-    tripId: j['tripId'] as String,
-    title: j['title'] as String,
-    amount: (j['amount'] as num).toDouble(),
-    category: j['category'] as String,
-    date: DateTime.parse(j['date'] as String),
-    paidBy: j['paidBy'] as String,
-    sharedWith: (j['sharedWith'] as List).cast<String>(),
-    currency: (j['currency'] as String).toUpperCase(), // <-- add
+  factory Expense.fromJson(Map<String, dynamic> json) => Expense(
+    id: (json['id'] as String?) ?? '',
+    tripId: (json['tripId'] as String?) ?? '',
+    title: (json['title'] as String?) ?? '',
+    amount: (json['amount'] as num?)?.toDouble() ?? 0.0,
+    category: (json['category'] as String?) ?? '',
+    date: DateTime.parse((json['date'] as String?) ?? DateTime.now().toIso8601String()),
+    paidBy: (json['paidBy'] as String?) ?? '',
+    sharedWith: (json['sharedWith'] as List<dynamic>?)?.cast<String>() ?? const <String>[],
+    currency: (json['currency'] as String?) ?? '',
   );
+
 
 // toJson
   Map<String, dynamic> toJson() => {

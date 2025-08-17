@@ -171,13 +171,28 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     );
     if (ok == true) {
       try {
+        // 1) Must have an active trip or we can't attach this budget
+        final active = TripStorageService.loadLightweight();
+        if (active == null) {
+          _showSnack('Pick a trip first');
+          return;
+        }
+
+      // 2) Create the Trip budget *attached* to this trip
         await widget.api.createBudget(
           kind: BudgetKind.trip,
-          currency: currencyCtrl.text.trim().toUpperCase(),
+          currency: currencyCtrl.text.trim().toUpperCase(),   // or active.currency if you prefer
           amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
+          tripId: active.id,                                  // <-- REQUIRED so it shows up
           name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
         );
+
+        // 3) Let the orphan filter know about this trip immediately
+        _knownTripIds.add(active.id);
+
+        // 4) Refresh list
         await _refresh();
+
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Trip budget created')),

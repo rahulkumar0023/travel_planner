@@ -1,11 +1,16 @@
+// app_shell imports patch start
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/trip.dart';
-import 'dashboard_screen.dart';
-import 'trip_selection_screen.dart';
-import 'expenses_screen.dart';
 import 'budgets_screen.dart';
+import 'dashboard_screen.dart';
+import 'expenses_screen.dart';
+import 'trip_selection_screen.dart';
+// app_shell imports patch end
+
 
 class AppShell extends StatefulWidget {
   final ApiService api;
@@ -18,6 +23,10 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   Trip? _activeTrip;
   int _tabIndex = 0;
+
+  // app_shell dashboard key field start
+  Key _dashKey = UniqueKey();
+// app_shell dashboard key field end
 
   @override
   void initState() {
@@ -39,6 +48,22 @@ class _AppShellState extends State<AppShell> {
     });
   }
 
+  // app_shell _openTripPicker method start
+  Future<void> _openTripPicker() async {
+    final picked = await Navigator.of(context).push<Trip>(
+      MaterialPageRoute(builder: (_) => TripSelectionScreen(api: widget.api)),
+    );
+    if (picked != null) {
+      await TripStorageService.save(picked);
+      if (!mounted) return;
+      // Recreate DashboardScreen so it reloads the active trip
+      setState(() {
+        _dashKey = UniqueKey();
+      });
+    }
+  }
+// app_shell _openTripPicker method end
+
   void _switchTrip() async {
     final picked = await Navigator.of(context).push<Trip>(
       MaterialPageRoute(builder: (_) => TripSelectionScreen(api: widget.api)),
@@ -54,8 +79,9 @@ class _AppShellState extends State<AppShell> {
   Widget build(BuildContext context) {
     final tabs = <Widget>[
       DashboardScreen(
-        activeTrip: _activeTrip,
-        onSwitchTrip: _switchTrip,
+       // activeTrip: _activeTrip,
+        key: _dashKey,
+        onSwitchTrip: _openTripPicker,
         api: widget.api,
       ),
       ExpensesScreen(api: widget.api),

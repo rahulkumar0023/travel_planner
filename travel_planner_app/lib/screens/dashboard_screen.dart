@@ -1,30 +1,32 @@
-// lib/screens/dashboard_screen.dart
+// imports patch start
 import 'package:flutter/material.dart';
 import 'package:hive/hive.dart';
 
 import '../models/trip.dart';
 import '../models/expense.dart';
+import '../models/budget.dart';
 
 import '../services/api_service.dart';
 import '../services/prefs_service.dart';
 import '../services/trip_storage_service.dart';
+import '../services/local_trip_store.dart'; // <-- keep
 import '../services/participants_service.dart';
 
 import 'expense_form_screen.dart';
 import 'group_balance_screen.dart';
 import 'participants_screen.dart';
 import 'settings_screen.dart';
-import '../models/budget.dart';          // + for BudgetKind, Budget
-import 'budgets_screen.dart';            // + for quick CTA navigation
+import 'budgets_screen.dart';
+import 'trip_selection_screen.dart';        // <-- keep
+// imports patch end
+
 
 class DashboardScreen extends StatefulWidget {
-  final Trip? activeTrip;
   final VoidCallback onSwitchTrip;
   final ApiService api;
 
   const DashboardScreen({
     super.key,
-    required this.activeTrip,
     required this.onSwitchTrip,
     required this.api,
   });
@@ -34,6 +36,7 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
+  Trip? _activeTrip;
   late final Box<Expense> _box;
   List<Expense> _expenses = [];
   String? _homeCurrencyCode;
@@ -41,20 +44,64 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   double? _tripBudgetOverride; // filled if we detect a matching Trip budget
 
+// initState patch start
   @override
   void initState() {
     super.initState();
+    _ensureActiveTrip(); // <- add missing semicolon
+
     _box = Hive.box<Expense>('expensesBox');
     _loadLocal();
     _updateApproxHome();
-    _loadTripBudgetOverride(); // ← add this line
+    _loadTripBudgetOverride();
   }
+// initState patch end
+
 
   double get _totalSpent =>
       _expenses.fold<double>(0, (sum, e) => sum + e.amount);
 
+  // _ensureActiveTrip method start
+  Future<void> _ensureActiveTrip() async {
+    _activeTrip = TripStorageService.loadLightweight();
+    if (_activeTrip == null) {
+      if (mounted) setState(() {}); // triggers empty-state
+      return;
+    }
+    // Optional: verify it still exists in cache so deleted trips don't show
+    try {
+      final cached = await LocalTripStore.load();
+      final exists = cached.any((t) => t.id == _activeTrip!.id);
+      if (!exists) {
+        await TripStorageService.clear();
+        _activeTrip = null;
+        if (mounted) setState(() {});
+      }
+    } catch (_) {}
+  }
+// _ensureActiveTrip method end
+
+// _openTripPicker method (final) start
+  Future<void> _openTripPicker() async {
+    final picked = await Navigator.of(context).push<Trip>(
+      MaterialPageRoute(builder: (_) => TripSelectionScreen(api: widget.api)),
+    );
+    if (picked != null) {
+      await TripStorageService.save(picked);
+      setState(() => _activeTrip = picked);
+      // refresh dependent UI
+      await _loadLocal();
+      await _updateApproxHome();
+      await _loadTripBudgetOverride();
+    }
+  }
+// _openTripPicker method (final) end
+
+
+
+
   Future<void> _loadLocal() async {
-    final t = widget.activeTrip;
+    final t = _activeTrip;
     if (t == null) {
       setState(() => _expenses = []);
       return;
@@ -67,7 +114,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _updateApproxHome() async {
-    final t = widget.activeTrip;
+    final t = _activeTrip;
     if (t == null) return;
     try {
       final home = await PrefsService.getHomeCurrency();
@@ -87,7 +134,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _loadTripBudgetOverride() async {
-    final t = widget.activeTrip;
+    final t = _activeTrip;
     if (t == null) return;
     try {
       final all = await widget.api.fetchBudgetsOrCache();
@@ -113,11 +160,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 
   Future<void> _addExpenseForm() async {
-    final t = widget.activeTrip;
+    final t = _activeTrip;
     if (t == null) return;
 
     // Fetch participants from your participants service (NOT http)
-    final List<String> participants = participantsService.participants;
+    final List<String> participants = t.participants; // fallback to trip participants
 
     if (!mounted) return;
     await Navigator.of(context).push(
@@ -153,19 +200,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
-  @override
-  void didUpdateWidget(covariant DashboardScreen oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    if (oldWidget.activeTrip?.id != widget.activeTrip?.id) {
-      _loadLocal();
-      _updateApproxHome();
-      _loadTripBudgetOverride(); // ← add this line
-    }
-  }
+
 
   @override
   Widget build(BuildContext context) {
-    final t = widget.activeTrip;
+    final t = _activeTrip;
 
     if (t == null) {
       return Scaffold(
@@ -177,7 +216,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               const Text('No trip selected'),
               const SizedBox(height: 8),
               FilledButton(
-                onPressed: widget.onSwitchTrip,
+                onPressed: _openTripPicker,
                 child: const Text('Select a trip'),
               ),
             ],
@@ -194,7 +233,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         title: Text('Dashboard • ${t.name}'),
         actions: [
           IconButton(
-            onPressed: widget.onSwitchTrip,
+            onPressed: _openTripPicker,
             icon: const Icon(Icons.swap_horiz),
           ),
           IconButton(
@@ -261,7 +300,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     // - double _totalSpent; (your existing spent computation)
                     // - double? _approxHomeValue; String? _homeCurrencyCode; (optional approx line)
                     // - import 'budgets_screen.dart';
-                    final t = widget.activeTrip!;
+                    final t = _activeTrip!;
                     final budget = (_tripBudgetOverride ?? t.initialBudget);
                     final hasBudget = budget > 0;
                     final spent = _totalSpent;
@@ -326,7 +365,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 subtitle: Text(
                   '${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}',
                 ),
-                trailing: Text('${e.amount.toStringAsFixed(2)} ${t.currency}'),
+                trailing: Text('${e.amount.toStringAsFixed(2)} ${e.currency}'),
               ),
             ),
         ],

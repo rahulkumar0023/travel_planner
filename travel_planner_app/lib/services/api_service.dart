@@ -402,26 +402,44 @@ class ApiService {
 
         // Success with body
         if (res.statusCode == 200 || res.statusCode == 201) {
+          late final Budget created;
           if (res.body.isNotEmpty) {
             final map = jsonDecode(res.body) as Map<String, dynamic>;
-            return Budget.fromJson(map);
+            created =  Budget.fromJson(map);
+          } else {
+            // Success without body → synthesize from payload + Location header if present
+            final loc = res.headers['location'];
+            final id = (loc != null && loc.trim().isNotEmpty)
+                ? loc.split('/').last
+                : DateTime.now().millisecondsSinceEpoch.toString();
+            created =  Budget(
+              id: id,
+              kind: kind,
+              currency: currency,
+              amount: amount,
+              year: year,
+              month: month,
+              tripId: tripId,
+              name: name,
+            );
           }
-          // Success without body → synthesize from payload + Location header if present
-          final loc = res.headers['location'];
-          final id = (loc != null && loc.trim().isNotEmpty)
-              ? loc.split('/').last
-              : DateTime.now().millisecondsSinceEpoch.toString();
-          return Budget(
-            id: id,
-            kind: kind,
-            currency: currency,
-            amount: amount,
-            year: year,
-            month: month,
-            tripId: tripId,
-            name: name,
-          );
+          // --- optimistic cache: merge into LocalBudgetStore so UI shows it immediately ---
+          try {
+            final cached = await LocalBudgetStore.load();
+            final idx = cached.indexWhere((b) => b.id == created.id);
+            if (idx >= 0) {
+              cached[idx] = created;
+            } else {
+              cached.add(created);
+            }
+            await LocalBudgetStore.save(cached);
+          } catch (_) {
+            // ignore cache errors
+          }
+          return created;
         }
+
+
 
         // If 404, try the next candidate; otherwise capture error and continue
         if (res.statusCode != 404) {
