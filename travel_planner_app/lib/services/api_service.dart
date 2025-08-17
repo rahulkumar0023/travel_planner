@@ -1,15 +1,30 @@
 import 'dart:convert';
+
+import 'package:flutter/foundation.dart'; // ← make sure you have this model
 import 'package:http/http.dart' as http;
-import '../models/trip.dart';
-import '../models/expense.dart';
+
 import '../models/balance_row.dart';
-import '../models/budget.dart'; // ← make sure you have this model
+import '../models/budget.dart';
+import '../models/expense.dart';
+import '../models/trip.dart';
+import 'local_budget_store.dart';
+
+class _FxCache {
+  _FxCache(this.rate, this.ts);
+
+  final double rate;
+  final DateTime ts;
+}
 
 class ApiService {
   final String baseUrl;
 
   // Auth (set in Auth flow; attached to every request via _headers)
   String? _authToken;
+  bool lastBudgetsFromCache = false;
+
+// --- FX cache (1h TTL) ---
+  final Map<String, _FxCache> _fx = {}; // key: 'FROM_TO'
 
   // NOTE: cannot be const because _authToken is mutable.
   ApiService({required this.baseUrl});
@@ -169,40 +184,39 @@ class ApiService {
   // -----------------------------
   /// Preferred (named params). Returns a concrete double; if conversion fails,
   /// it returns the original [amount].
+// REPLACE your convert(...) with this version
   Future<double> convert({
     required double amount,
     required String from,
     required String to,
   }) async {
-    if (amount == 0 || from.toUpperCase() == to.toUpperCase()) return amount;
+    // REPLACE convert(...) BODY with:
+    {
+      final f = from.toUpperCase();
+      final t = to.toUpperCase();
+      if (amount == 0 || f == t) return amount;
 
-    final uri = Uri.parse(
-      '$baseUrl/currency/convert?amount=$amount&from=$from&to=$to',
-    );
-    final res = await http.get(uri, headers: _headers());
-    if (res.statusCode != 200) return amount;
+      // 1h TTL
+      final key = '${f}_${t}';
+      final now = DateTime.now();
+      final ttl = const Duration(hours: 1);
 
-    final body = jsonDecode(res.body);
-
-    // Accept many shapes:
-    // { "converted": 12.34 } | { "result": 12.34 } | { "amount": 12.34 } | { "value": 12.34 }
-    // or 12.34 | "12.34"
-    if (body is Map<String, dynamic>) {
-      for (final k in ['converted', 'result', 'amount', 'value']) {
-        final v = body[k];
-        if (v is num) return v.toDouble();
-        if (v is String) {
-          final d = double.tryParse(v);
-          if (d != null) return d;
-        }
+      // Use cached rate if fresh
+      final hit = _fx[key];
+      if (hit != null && now.difference(hit.ts) < ttl) {
+        return amount * hit.rate;
       }
-    } else if (body is num) {
-      return body.toDouble();
-    } else if (body is String) {
-      final d = double.tryParse(body);
-      if (d != null) return d;
+
+      // Fetch rate with amount=1 and cache it
+      final one = await _convertRaw(amount: 1.0, from: f, to: t);
+      if (one > 0) {
+        _fx[key] = _FxCache(one, now);
+        return amount * one;
+      }
+
+      // Fallback to direct conversion of the full amount
+      return await _convertRaw(amount: amount, from: f, to: t);
     }
-    return amount; // fallback
   }
 
   /// Backward-compatible wrapper for your previous positional signature.
@@ -210,6 +224,52 @@ class ApiService {
   Future<double?> convertLegacy(double amount, String from, String to) async {
     final v = await convert(amount: amount, from: from, to: to);
     return v;
+  }
+
+  Future<double> _convertRaw({
+    required double amount,
+    required String from,
+    required String to,
+  }) async {
+    // This is essentially your current convert() logic without caching.
+    if (amount == 0 || from.toUpperCase() == to.toUpperCase()) return amount;
+    final uri = Uri.parse('$baseUrl/currency/convert').replace(
+      queryParameters: {
+        'from': from.toUpperCase(),
+        'to': to.toUpperCase(),
+        'amount': amount.toString(),
+      },
+    );
+    final res = await http.get(uri, headers: _headers());
+    if (res.statusCode != 200) {
+      if (kDebugMode) {
+        debugPrint('convert(raw) HTTP ${res.statusCode}: ${res.body}');
+      }
+      return amount;
+    }
+    try {
+      final body = jsonDecode(res.body);
+      if (body is Map<String, dynamic>) {
+        final v = body['amount'] ??
+            body['converted'] ??
+            body['result'] ??
+            body['value'];
+        if (v is num) return v.toDouble();
+        if (v is String) {
+          final d = double.tryParse(v);
+          if (d != null) return d;
+        }
+      } else if (body is num) {
+        return body.toDouble();
+      } else if (body is String) {
+        final d = double.tryParse(body);
+        if (d != null) return d;
+      }
+    } catch (e) {
+      if (kDebugMode)
+        debugPrint('convert(raw) parse error: $e — body: ${res.body}');
+    }
+    return amount;
   }
 
   // -----------------------------
@@ -228,6 +288,25 @@ class ApiService {
     return list.map(Budget.fromJson).toList();
   }
 
+  /// Same as fetchBudgets but with a timeout and cache fallback.
+  Future<List<Budget>> fetchBudgetsOrCache({Duration timeout = const Duration(seconds: 5)}) async {
+    lastBudgetsFromCache = false;
+    try {
+      final network = await fetchBudgets().timeout(timeout);
+      // Persist fresh copy for offline
+      // cache save (fire-and-forget)
+      // ignore: unawaited_futures
+      LocalBudgetStore.save(network);
+      return network;
+    } catch (_) {
+      final cached = await LocalBudgetStore.load();
+      lastBudgetsFromCache = true;
+      return cached;
+    }
+  }
+
+
+  //create Budget start
   Future<Budget> createBudget({
     required BudgetKind kind,
     required String currency,
@@ -304,8 +383,108 @@ class ApiService {
     throw lastError ??
         Exception('Create budget failed: no budget endpoint available');
   }
+//create Budget end
 
+  //update Budget start
+  Future<Budget> updateBudget({
+    required String id,
+    required BudgetKind kind,
+    required String currency,
+    required double amount,
+    int? year,
+    int? month,
+    String? tripId,
+    String? name,
+    String? linkedMonthlyBudgetId,
+  }) async {
+    final payload = {
+      'id': id,
+      'kind': kind == BudgetKind.monthly ? 'monthly' : 'trip',
+      'currency': currency,
+      'amount': amount,
+      if (year != null) 'year': year,
+      if (month != null) 'month': month,
+      if (tripId != null) 'tripId': tripId,
+      if (name != null) 'name': name,
+      if (linkedMonthlyBudgetId != null) 'linkedMonthlyBudgetId': linkedMonthlyBudgetId,
+    };
 
+    final endpoints = <({String method, String url})>[
+      (method: 'PUT', url: '$baseUrl/budgets/$id'),
+      (method: 'PATCH', url: '$baseUrl/budgets/$id'),
+      (method: 'POST', url: '$baseUrl/budgets/$id'), // some APIs accept POST for update
+      (method: 'PUT', url: '$baseUrl/budget/$id'),
+    ];
+
+    Exception? lastError;
+    for (final e in endpoints) {
+      try {
+        final uri = Uri.parse(e.url);
+        final res = await (
+            e.method == 'PUT' ? http.put(uri, headers: _headers(jsonBody: true), body: jsonEncode(payload)) :
+            e.method == 'PATCH' ? http.patch(uri, headers: _headers(jsonBody: true), body: jsonEncode(payload)) :
+            http.post(uri, headers: _headers(jsonBody: true), body: jsonEncode(payload))
+        );
+        if (res.statusCode == 200) {
+          final map = jsonDecode(res.body) as Map<String, dynamic>;
+          return Budget.fromJson(map);
+        }
+        if (res.statusCode == 204 || (res.statusCode == 201 && res.body.isEmpty)) {
+          // No body — synthesize from payload
+          return Budget(
+            id: id,
+            kind: kind,
+            currency: currency,
+            amount: amount,
+            year: year,
+            month: month,
+            tripId: tripId,
+            name: name,
+            linkedMonthlyBudgetId: linkedMonthlyBudgetId,
+          );
+        }
+        if (res.statusCode != 404) {
+          lastError = Exception('Update budget failed @ ${e.method} ${e.url}: ${res.statusCode} ${res.body}');
+        }
+      } catch (err) {
+        lastError = Exception('Update budget error @ ${e.method} ${e.url}: $err');
+      }
+    }
+    throw lastError ?? Exception('Update budget failed: endpoint not found');
+  }
+
+  // update budget end
+
+  // delete Budget start
+  Future<void> deleteBudget(String id) async {
+    final attempts = <({String method, String url})>[
+      (method: 'DELETE', url: '$baseUrl/budgets/$id'),
+      (method: 'POST', url: '$baseUrl/budgets/$id/delete'),
+      (method: 'DELETE', url: '$baseUrl/budget/$id'),
+    ];
+    Exception? lastError;
+    for (final a in attempts) {
+      try {
+        final uri = Uri.parse(a.url);
+        final res = await (
+            a.method == 'DELETE' ? http.delete(uri, headers: _headers()) :
+            http.post(uri, headers: _headers())
+        );
+        if (res.statusCode == 200 || res.statusCode == 202 || res.statusCode == 204) {
+          return;
+        }
+        if (res.statusCode != 404) {
+          lastError = Exception('Delete budget failed @ ${a.method} ${a.url}: ${res.statusCode} ${res.body}');
+        }
+      } catch (err) {
+        lastError = Exception('Delete budget error @ ${a.method} ${a.url}: $err');
+      }
+    }
+    throw lastError ?? Exception('Delete budget failed: endpoint not found');
+  }
+// delete Budget end
+
+// link Trip Budget start
   Future<void> linkTripBudget({
     required String tripBudgetId,
     required String monthlyBudgetId,
@@ -334,4 +513,25 @@ class ApiService {
       throw Exception('Linking failed: ${res.statusCode} ${res.body}');
     }
   }
+  // link trip budget end
+
+  // unlink Trip Budget start
+  Future<void> unlinkTripBudget({required String tripBudgetId}) async {
+    // Preferred endpoint
+    var res = await http.post(
+      Uri.parse('$baseUrl/budgets/$tripBudgetId/unlink'),
+      headers: _headers(),
+    );
+    if (res.statusCode == 404) {
+      // Legacy fallback: delete the link row by trip id
+      res = await http.delete(
+        Uri.parse('$baseUrl/budget-links/$tripBudgetId'),
+        headers: _headers(),
+      );
+    }
+    if (res.statusCode != 200 && res.statusCode != 204) {
+      throw Exception('Unlink failed: ${res.statusCode} ${res.body}');
+    }
+  }
+  // unlink trip budget end
 }

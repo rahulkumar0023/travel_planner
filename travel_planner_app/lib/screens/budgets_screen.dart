@@ -18,19 +18,26 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _future = widget.api.fetchBudgets();
+    _future = widget.api.fetchBudgetsOrCache();
   }
 
   Future<void> _refresh() async {
-    setState(() => _future = widget.api.fetchBudgets());
+    setState(() {                       // ✅ no return value -> synchronous
+      _future = widget.api.fetchBudgetsOrCache();
+    });
     await _future;
   }
 
   Future<void> _createMonthlyDialog() async {
-    final yearCtrl = TextEditingController(text: DateTime.now().year.toString());
-    final monthCtrl = TextEditingController(text: DateTime.now().month.toString());
+    final now = DateTime.now();
+    String _monthName(int m) =>
+        const ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m - 1];
+
+    final nameCtrl   = TextEditingController(text: '${_monthName(now.month)} ${now.year}');
+    final yearCtrl   = TextEditingController(text: now.year.toString());
+    final monthCtrl  = TextEditingController(text: now.month.toString());
     final amountCtrl = TextEditingController();
-    final currencyCtrl = TextEditingController(text: _home);
+    final currencyCtrl = TextEditingController(text: _home); // your home currency
 
     final ok = await showDialog<bool>(
       context: context,
@@ -39,13 +46,22 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: yearCtrl, decoration: const InputDecoration(labelText: 'Year')),
+            TextField(controller: nameCtrl,
+                decoration: const InputDecoration(labelText: 'Name (optional)')),
             const SizedBox(height: 8),
-            TextField(controller: monthCtrl, decoration: const InputDecoration(labelText: 'Month (1-12)')),
+            TextField(controller: yearCtrl,
+                decoration: const InputDecoration(labelText: 'Year')),
             const SizedBox(height: 8),
-            TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
+            TextField(controller: monthCtrl,
+                decoration: const InputDecoration(labelText: 'Month (1–12)')),
             const SizedBox(height: 8),
-            TextField(controller: currencyCtrl, decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
+            TextField(controller: amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Amount')),
+            const SizedBox(height: 8),
+            TextField(controller: currencyCtrl,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
           ],
         ),
         actions: [
@@ -54,30 +70,31 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         ],
       ),
     );
-    if (ok == true) {
-      try {
-        await widget.api.createBudget(
-          kind: BudgetKind.monthly,
-          currency: currencyCtrl.text.trim().toUpperCase(),
-          amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
-          year: int.tryParse(yearCtrl.text.trim()),
-          month: int.tryParse(monthCtrl.text.trim()),
+
+    if (ok != true) return;
+
+    try {
+      await widget.api.createBudget(
+        kind: BudgetKind.monthly,
+        currency: currencyCtrl.text.trim().toUpperCase(),
+        amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
+        year: int.tryParse(yearCtrl.text.trim()),
+        month: int.tryParse(monthCtrl.text.trim()),
+        name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
+      );
+      await _refresh();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Monthly budget created')),
         );
-        await _refresh();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Monthly budget created')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not create budget: $e')),
-          );
-        }
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not create budget: $e')),
+        );
       }
     }
-
   }
 
   Future<void> _createTripDialog() async {
@@ -130,6 +147,122 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
   }
 
+  Future<void> _editMonthly(Budget m) async {
+    final yearCtrl = TextEditingController(text: (m.year ?? 0).toString());
+    final monthCtrl = TextEditingController(text: (m.month ?? 0).toString());
+    final amountCtrl = TextEditingController(text: m.amount.toString());
+    final nameCtrl = TextEditingController(text: m.name ?? '');
+    final currencyCtrl = TextEditingController(text: m.currency);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Monthly Budget'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name (optional)')),
+          const SizedBox(height: 8),
+          TextField(controller: yearCtrl, decoration: const InputDecoration(labelText: 'Year')),
+          const SizedBox(height: 8),
+          TextField(controller: monthCtrl, decoration: const InputDecoration(labelText: 'Month (1–12)')),
+          const SizedBox(height: 8),
+          TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
+          const SizedBox(height: 8),
+          TextField(controller: currencyCtrl, textCapitalization: TextCapitalization.characters, decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.api.updateBudget(
+        id: m.id,
+        kind: BudgetKind.monthly,
+        currency: currencyCtrl.text.trim().toUpperCase(),
+        amount: double.tryParse(amountCtrl.text.trim()) ?? m.amount,
+        year: int.tryParse(yearCtrl.text.trim()),
+        month: int.tryParse(monthCtrl.text.trim()),
+        name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
+      );
+      await _refresh();
+      _showSnack('Monthly budget updated');
+    } catch (e) {
+      _showSnack('Could not update: $e');
+    }
+  }
+
+  Future<void> _editTrip(Budget t) async {
+    final nameCtrl = TextEditingController(text: t.name ?? '');
+    final amountCtrl = TextEditingController(text: t.amount.toString());
+    final currencyCtrl = TextEditingController(text: t.currency);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Trip Budget'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name')),
+          const SizedBox(height: 8),
+          TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
+          const SizedBox(height: 8),
+          TextField(controller: currencyCtrl, textCapitalization: TextCapitalization.characters, decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.api.updateBudget(
+        id: t.id,
+        kind: BudgetKind.trip,
+        currency: currencyCtrl.text.trim().toUpperCase(),
+        amount: double.tryParse(amountCtrl.text.trim()) ?? t.amount,
+        name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
+        tripId: t.tripId,
+        linkedMonthlyBudgetId: t.linkedMonthlyBudgetId,
+      );
+      await _refresh();
+      _showSnack('Trip budget updated');
+    } catch (e) {
+      _showSnack('Could not update: $e');
+    }
+  }
+
+  Future<void> _deleteBudget(Budget b) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Delete budget?'),
+        content: const Text('This cannot be undone.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    try {
+      await widget.api.deleteBudget(b.id);
+      await _refresh();
+      _showSnack('Budget deleted');
+    } catch (e) {
+      _showSnack('Could not delete: $e');
+    }
+  }
+
+  Future<void> _unlinkTrip(Budget t) async {
+    try {
+      await widget.api.unlinkTripBudget(tripBudgetId: t.id);
+      await _refresh();
+      _showSnack('Unlinked from monthly');
+    } catch (e) {
+      _showSnack('Could not unlink: $e');
+    }
+  }
+
   Future<void> _linkTripToMonthly(Budget trip, List<Budget> monthly) async {
     final selected = await showDialog<Budget>(
       context: context,
@@ -139,7 +272,11 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
           for (final m in monthly)
             SimpleDialogOption(
               onPressed: () => Navigator.pop(ctx, m),
-              child: Text('${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}'),
+              child: Text(
+                (m.name?.isNotEmpty == true)
+                    ? '${m.name} • ${m.amount.toStringAsFixed(0)} ${m.currency}'
+                    : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
+              ),
             )
         ],
       ),
@@ -152,8 +289,53 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
   Future<double> _approx(String fromCurrency, double amount) async {
     _home = TripStorageService.getHomeCurrency();
-    return widget.api.convert(amount: amount, from: fromCurrency, to: _home);
+    return widget.api.convert(
+      amount: amount,
+      from: fromCurrency.toUpperCase(),
+      to: _home.toUpperCase(),
+    );
   }
+
+  // ➊ Find a monthly by id
+  Budget? _monthlyById(String? id, List<Budget> monthly) {
+    if (id == null) return null;
+    for (final m in monthly) {
+      if (m.id == id) return m;
+    }
+    return null;
+  }
+
+// ➋ Build a friendly label for a linked monthly
+  String _linkedLabel(String? monthlyId, List<Budget> monthly) {
+    final m = _monthlyById(monthlyId, monthly);
+    if (m == null) return 'Not linked';
+    final yyMm = '${m.year}-${(m.month ?? 0).toString().padLeft(2, '0')}';
+    return 'Linked → ${ (m.name?.isNotEmpty == true) ? m.name! : yyMm }';
+  }
+
+  void _showSnack(String msg) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+  }
+
+// ➌ Convert to a specific currency (used for “linked” ≈ line)
+  Future<double?> _approxTo({
+    required String from,
+    required String to,
+    required double amount,
+  }) async {
+    if (from.toUpperCase() == to.toUpperCase()) return amount;
+    try {
+      return await widget.api.convert(
+        amount: amount,
+        from: from.toUpperCase(),
+        to: to.toUpperCase(),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -177,10 +359,21 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
           final all = snap.data ?? const <Budget>[];
           final monthly = all.where((b) => b.kind == BudgetKind.monthly).toList();
           final trips   = all.where((b) => b.kind == BudgetKind.trip).toList();
+          final usingCache = widget.api.lastBudgetsFromCache;
 
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
+              if (usingCache)
+                Container(
+                  margin: const EdgeInsets.only(bottom: 12),
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).colorScheme.surfaceVariant,
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Text('Showing cached budgets (offline or server unavailable). Pull to refresh.'),
+                ),
               Text('Monthly', style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 8),
               if (monthly.isEmpty)
@@ -190,12 +383,27 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                   future: _approx(m.currency, m.amount),
                   builder: (_, approx) => Card(
                     child: ListTile(
-                      title: Text('${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}'),
+                      title: Text(
+                        (m.name?.isNotEmpty == true)
+                            ? '${m.name} • ${m.amount.toStringAsFixed(0)} ${m.currency}'
+                            : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
+                      ),
                       subtitle: (approx.hasData && _home != m.currency)
                           ? Text('≈ ${approx.data!.toStringAsFixed(2)} $_home')
                           : null,
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (v) {
+                          if (v == 'edit') _editMonthly(m);
+                          if (v == 'delete') _deleteBudget(m);
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'edit', child: Text('Edit')),
+                          PopupMenuItem(value: 'delete', child: Text('Delete')),
+                        ],
+                      ),
                     ),
                   ),
+
                 ),
               const SizedBox(height: 16),
               Text('Trip', style: Theme.of(context).textTheme.titleMedium),
@@ -208,22 +416,63 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                   builder: (_, approx) => Card(
                     child: ListTile(
                       title: Text('${t.name ?? 'Trip'} • ${t.amount.toStringAsFixed(0)} ${t.currency}'),
-                      subtitle: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          if (approx.hasData && _home != t.currency)
-                            Text('≈ ${approx.data!.toStringAsFixed(2)} $_home'),
-                          Text(
-                            t.linkedMonthlyBudgetId == null
-                                ? 'Not linked'
-                                : 'Linked → ${t.linkedMonthlyBudgetId}',
+                      subtitle: FutureBuilder<double?>(
+                        future: () async {
+                          final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly);
+                          if (linked == null) return null;
+                          return _approxTo(
+                            from: t.currency,
+                            to: linked.currency,
+                            amount: t.amount,
+                          );
+                        }(),
+                        builder: (_, linkedApprox) {
+                          final lines = <Widget>[];
+
+                          // ≈ home line (kept as-is)
+                          if (approx.hasData && _home != t.currency) {
+                            lines.add(Text('≈ ${approx.data!.toStringAsFixed(2)} $_home'));
+                          }
+
+                          // Linked label
+                          lines.add(Text(
+                            _linkedLabel(t.linkedMonthlyBudgetId, monthly),
                             style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
+                          ));
+
+                          // ≈ linked monthly currency line
+                          if (linkedApprox.hasData) {
+                            final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly)!;
+                            lines.add(Text(
+                              '≈ ${linkedApprox.data!.toStringAsFixed(2)} ${linked.currency} (linked)',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ));
+                          }
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: lines,
+                          );
+                        },
                       ),
-                      trailing: TextButton(
-                        onPressed: monthly.isEmpty ? null : () => _linkTripToMonthly(t, monthly),
-                        child: const Text('Link'),
+                      trailing: PopupMenuButton<String>(
+                        onSelected: (v) {
+                          if (v == 'link') _linkTripToMonthly(t, monthly);
+                          if (v == 'unlink') _unlinkTrip(t);
+                          if (v == 'edit') _editTrip(t);
+                          if (v == 'delete') _deleteBudget(t);
+                        },
+                        itemBuilder: (_) => [
+                          const PopupMenuItem(value: 'edit', child: Text('Edit')),
+                          const PopupMenuItem(value: 'delete', child: Text('Delete')),
+                          const PopupMenuDivider(),
+                          if (t.linkedMonthlyBudgetId == null)
+                            const PopupMenuItem(value: 'link', child: Text('Link to monthly'))
+                          else ...[
+                            const PopupMenuItem(value: 'link', child: Text('Change link')),
+                            const PopupMenuItem(value: 'unlink', child: Text('Unlink')),
+                          ],
+                        ],
                       ),
                     ),
                   ),

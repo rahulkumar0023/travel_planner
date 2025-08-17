@@ -19,7 +19,7 @@ Future<void> main() async {
   // Read API base from --dart-define (with safe default)
   const base = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://travel-planner-api-uo05.onrender.com',
+    defaultValue: 'https://travel-planner-api-latest.onrender.com',
   );
 
   final api = ApiService(baseUrl: base);
