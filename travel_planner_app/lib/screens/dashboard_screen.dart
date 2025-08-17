@@ -166,12 +166,25 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Fetch participants from your participants service (NOT http)
     final List<String> participants = t.participants; // fallback to trip participants
 
+    // 👇 NEW: collect currencies for this trip
+    final budgets = await widget.api.fetchBudgetsOrCache();
+    final tripCurrencies = <String>{
+      t.currency.toUpperCase(), // always include trip base currency
+    };
+    for (final b in budgets) {
+      if (b.kind == BudgetKind.trip && b.tripId == t.id) {
+        tripCurrencies.add(b.currency.toUpperCase());
+      }
+    }
+    final availableCurrencies = tripCurrencies.toList()..sort();
+
     if (!mounted) return;
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ExpenseFormScreen(
           participants: participants,
           defaultCurrency: t.currency,
+          availableCurrencies: availableCurrencies, // 👈 pass choices here
           onSubmit: ({
             required String title,
             required double amount,

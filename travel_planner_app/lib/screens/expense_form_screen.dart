@@ -8,9 +8,11 @@ class ExpenseFormScreen extends StatefulWidget {
     required this.participants,
     required this.onSubmit,
     this.defaultCurrency,
+    this.availableCurrencies, // 👈 NEW
   });
 
   final List<String> participants;
+  final List<String>? availableCurrencies; // 👈 NEW
   final void Function({
     required String title,
     required double amount,
@@ -27,10 +29,11 @@ class ExpenseFormScreen extends StatefulWidget {
 }
 
 class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
+  late String _expenseCurrency;
+  late List<String> _currencyChoices;
   final _title = TextEditingController();
   final _amount = TextEditingController();
   late List<String> _participants; // safe list used across the form
-  late String _expenseCurrency;
   String _category = 'Food';
   late String _paidBy;
   late Set<String> _shared;
@@ -49,7 +52,17 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     _shared = {..._participants};     // default share with all shown
 
     final trip = TripStorageService.loadLightweight();
-    _expenseCurrency = (widget.defaultCurrency ?? trip?.currency ?? 'EUR').toUpperCase();
+    final incoming = widget.availableCurrencies;
+
+    _currencyChoices = (incoming != null && incoming.isNotEmpty)
+        ? incoming.map((c) => c.toUpperCase()).toSet().toList()
+        : <String>{
+      if (trip != null) trip.currency.toUpperCase()
+    }.toList();
+
+    _expenseCurrency = _currencyChoices.isNotEmpty
+        ? _currencyChoices.first
+        : (widget.defaultCurrency ?? 'EUR').toUpperCase();
 
   }
 // expense form initState fix end
@@ -72,7 +85,6 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final ccy = widget.defaultCurrency ?? '';
     final trip = TripStorageService.loadLightweight();
     final extras = (trip?.spendCurrencies ?? const <String>[]);
     final currencyChoices = <String>{ if (trip != null) trip.currency, ...extras }.toList()..sort();
@@ -93,8 +105,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           const SizedBox(height: 8),
           TextField(
             controller: _amount,
-            decoration: InputDecoration(
-                labelText: 'Amount ${selectedCurrency}'),
+            decoration: InputDecoration(labelText: 'Amount (${_expenseCurrency})'),
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
           ),
           const SizedBox(height: 8),
@@ -121,11 +132,10 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           // Currency field start
           const SizedBox(height: 8),
           DropdownButtonFormField<String>(
-            value: selectedCurrency, // make sure you have: late String _expenseCurrency; in State
+            value: _expenseCurrency,
             decoration: const InputDecoration(labelText: 'Currency'),
-            onChanged: (v) => setState(() => _expenseCurrency = (v ?? _expenseCurrency)),
-            // <-- THIS is the line you replace with the items patch above
-            items: currencyChoices
+            onChanged: (v) => setState(() => _expenseCurrency = v ?? _expenseCurrency),
+            items: _currencyChoices
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
           ),
