@@ -16,6 +16,7 @@ Future<void> main() async {
   // After Hive.initFlutter() + registerAdapter() + openBox(...)
 
   Hive.registerAdapter(ExpenseAdapter());
+  await Hive.deleteBoxFromDisk('expensesBox');
   await Hive.openBox<Expense>('expensesBox');
   await HiveMigrations.backfillExpenseCurrency();
   // Trip storage init
