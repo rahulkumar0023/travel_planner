@@ -1,6 +1,9 @@
 import 'package:flutter/material.dart';
-
+// add near the top
+import '../services/local_budget_store.dart';
+import '../models/budget.dart';
 import '../services/trip_storage_service.dart';
+import '../models/currencies.dart';
 
 class ExpenseFormScreen extends StatefulWidget {
   const ExpenseFormScreen({
@@ -29,8 +32,10 @@ class ExpenseFormScreen extends StatefulWidget {
 }
 
 class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
-  late String _expenseCurrency;
+
+// 👇 NEW: dropdown data + selection
   late List<String> _currencyChoices;
+  late String _expenseCurrency;
   final _title = TextEditingController();
   final _amount = TextEditingController();
   late List<String> _participants; // safe list used across the form
@@ -51,18 +56,23 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     _paidBy = _participants.first;    // safe: never empty due to fallback
     _shared = {..._participants};     // default share with all shown
 
+// decide initial (trip/default)
     final trip = TripStorageService.loadLightweight();
-    final incoming = widget.availableCurrencies;
+    final initial = (widget.defaultCurrency ?? trip?.currency ?? 'EUR').toUpperCase();
 
-    _currencyChoices = (incoming != null && incoming.isNotEmpty)
-        ? incoming.map((c) => c.toUpperCase()).toSet().toList()
-        : <String>{
-      if (trip != null) trip.currency.toUpperCase()
-    }.toList();
+// shortlist to pin at top (trip base + any extras you keep on the Trip)
+    final pinned = <String>{
+      initial,
+      ...((trip?.spendCurrencies ?? const <String>[]).map((e) => e.toUpperCase())),
+    };
 
-    _expenseCurrency = _currencyChoices.isNotEmpty
-        ? _currencyChoices.first
-        : (widget.defaultCurrency ?? 'EUR').toUpperCase();
+// build choices => pinned first, then everything else from kCurrencyCodes
+    _currencyChoices = [
+      ...pinned,
+      ...kCurrencyCodes.where((c) => !pinned.contains(c.toUpperCase())),
+    ];
+
+    _expenseCurrency = initial;
 
   }
 // expense form initState fix end
@@ -139,6 +149,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
           ),
+
           // Currency field end
 
           const SizedBox(height: 8),
