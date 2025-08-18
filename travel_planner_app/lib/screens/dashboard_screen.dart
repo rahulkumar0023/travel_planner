@@ -19,7 +19,8 @@ import 'participants_screen.dart';
 import 'settings_screen.dart';
 import 'budgets_screen.dart';
 import 'trip_selection_screen.dart';
-import '../services/budgets_sync.dart';      // <-- keep
+import '../services/budgets_sync.dart';
+import '../services/budgets_sync.dart';// <-- keep
 // imports patch end
 
 
@@ -39,6 +40,7 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   late final VoidCallback _budgetsListener;
+
 
   double _spentInTripCcy = 0.0;
   bool _recalcInFlight = false; // just to avoid overlapping recalcs
@@ -209,7 +211,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ..sort((a, b) => b.date.compareTo(a.date));
     });
 
-    // 👇 NEW: keep totals in sync
+
     await _recalcSpentInTripCurrency();
     await _updateApproxHome();
   }

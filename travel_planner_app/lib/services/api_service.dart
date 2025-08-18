@@ -423,19 +423,14 @@ class ApiService {
               name: name,
             );
           }
-          // --- optimistic cache: merge into LocalBudgetStore so UI shows it immediately ---
-          try {
-            final cached = await LocalBudgetStore.load();
-            final idx = cached.indexWhere((b) => b.id == created.id);
-            if (idx >= 0) {
-              cached[idx] = created;
-            } else {
-              cached.add(created);
-            }
-            await LocalBudgetStore.save(cached);
-          } catch (_) {
-            // ignore cache errors
-          }
+          // 👇 NEW: optimistic cache update so Dashboard/Budgets see it immediately
+          () async {
+            final list = await LocalBudgetStore.load();
+            final withoutDupes = list.where((b) => b.id != created.id).toList();
+            withoutDupes.add(created);
+            await LocalBudgetStore.save(withoutDupes);
+          }();
+
           return created;
         }
 
@@ -499,7 +494,14 @@ class ApiService {
         );
         if (res.statusCode == 200) {
           final map = jsonDecode(res.body) as Map<String, dynamic>;
-          return Budget.fromJson(map);
+          final updated = Budget.fromJson(map);
+          // 👇 NEW
+          () async {
+            final list = await LocalBudgetStore.load();
+            final next = list.where((b) => b.id != updated.id).toList()..add(updated);
+            await LocalBudgetStore.save(next);
+          }();
+          return updated;
         }
         if (res.statusCode == 204 || (res.statusCode == 201 && res.body.isEmpty)) {
           // No body — synthesize from payload
@@ -543,6 +545,11 @@ class ApiService {
             http.post(uri, headers: _headers())
         );
         if (res.statusCode == 200 || res.statusCode == 202 || res.statusCode == 204) {
+          // deleteBudget: inside the success branch (200/202/204):
+          () async {
+            final list = await LocalBudgetStore.load();
+            await LocalBudgetStore.save(list.where((b) => b.id != id).toList());
+          }();
           return;
         }
         if (res.statusCode != 404) {
@@ -602,6 +609,13 @@ class ApiService {
       );
     }
     if (res.statusCode != 200 && res.statusCode != 204) {
+      () async {
+        final list = await LocalBudgetStore.load();
+        final next = list.map((b) =>
+        b.id == tripBudgetId ? b.copyWith(linkedMonthlyBudgetId: null) : b
+        ).toList();
+        await LocalBudgetStore.save(next);
+      }();
       throw Exception('Unlink failed: ${res.statusCode} ${res.body}');
     }
   }

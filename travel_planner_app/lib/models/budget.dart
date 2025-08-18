@@ -29,6 +29,37 @@ class Budget {
     this.linkedMonthlyBudgetId,
   });
 
+  // --- add this ---
+  static const _noChange = Object();
+
+  Budget copyWith({
+    String? id,
+    BudgetKind? kind,
+    String? currency,
+    double? amount,
+    int? year,
+    int? month,
+    String? tripId,
+    String? name,
+    // Use the sentinel so you can *set* null intentionally:
+    Object? linkedMonthlyBudgetId = _noChange,
+  }) {
+    return Budget(
+      id: id ?? this.id,
+      kind: kind ?? this.kind,
+      currency: currency ?? this.currency,
+      amount: amount ?? this.amount,
+      year: year ?? this.year,
+      month: month ?? this.month,
+      tripId: tripId ?? this.tripId,
+      name: name ?? this.name,
+      linkedMonthlyBudgetId: identical(linkedMonthlyBudgetId, _noChange)
+          ? this.linkedMonthlyBudgetId
+          : linkedMonthlyBudgetId as String?,
+    );
+  }
+  // --- end add ---
+
   factory Budget.fromJson(Map<String, dynamic> j) => Budget(
     id: j['id'].toString(),
     kind: (j['kind'] ?? 'trip') == 'monthly' ? BudgetKind.monthly : BudgetKind.trip,

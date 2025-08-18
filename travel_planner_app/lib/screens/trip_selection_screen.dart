@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../models/trip.dart';
 import 'dart:math';
+import '../services/budgets_sync.dart';
 import '../services/local_trip_store.dart';
 import '../services/trip_storage_service.dart';
 import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
@@ -128,6 +129,8 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
             name: saved.name,
           );
         }
+        // 👇 NEW: tell Home/Budgets to refresh their view
+        BudgetsSync.bump();
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(content: Text('Trip budget created')),
