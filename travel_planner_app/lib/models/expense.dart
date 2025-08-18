@@ -54,9 +54,14 @@ class Expense extends HiveObject {
     'title': title,
     'amount': amount,
     'category': category,
-    'date': date.toIso8601String(),
+    'date': _yyyyMmDd(date),
     'paidBy': paidBy,
     'sharedWith': sharedWith,
-    'currency': currency, // <-- add
+    'currency': currency,
   };
+
+// ===== _yyyyMmDd helper start =====
+  String _yyyyMmDd(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+// ===== _yyyyMmDd helper end =====
 }
