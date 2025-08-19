@@ -49,9 +49,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
-  double _spentInTripCcy = 0.0;
-  bool _recalcInFlight = false; // just to avoid overlapping recalcs
-
   Trip? _activeTrip;
   late final Box<Expense> _box;
   List<Expense> _expenses = [];
@@ -60,12 +57,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   double? _tripBudgetOverride; // filled if we detect a matching Trip budget
 
-  // Insights state
-  Map<String, double> _byCcy = <String, double>{};          // e.g. {'EUR': 50, 'INR': 10_000}
-  Map<String, double> _byCategoryBase = <String, double>{}; // in trip currency
-  double _spentInBase = 0.0;
-  double _dailyBurn = 0.0;
-  int? _daysLeft;
+  // insights state start
+  Map<String, double> _sumByCurrency = <String, double>{};      // native sums (EUR, PLN, INR…)
+  Map<String, double> _sumByCurrencyInTrip = <String, double>{}; // each currency ≈ in trip ccy
+  Map<String, double> _sumByCategoryInTrip = <String, double>{}; // category totals in trip ccy
+  double _spentInTripCcy = 0.0;                                  // grand total in trip ccy
+  bool _insightsBusy = false;
+  // insights state end
 
   bool _isArchivedTrip = false;
 
@@ -105,7 +103,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   @override
   void didUpdateWidget(covariant DashboardScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _recomputeInsights();
+    _recalcInsights();
     final id = _activeTrip?.id;
     if (id != null) {
       ArchivedTripsStore.isArchived(id).then((v) {
@@ -143,41 +141,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // _ensureActiveTrip method end
 
-  // --- spend buckets helpers start ---
-// Group local expenses by their *own* currency (PLN/EUR/TRY/etc.)
-  Map<String, double> _bucketsByCurrency() {
-    final m = <String, double>{};
-    final tripCcy = _activeTrip?.currency ?? 'EUR';
-    for (final e in _expenses) {
-      final c = (e.currency.isEmpty) ? tripCcy : e.currency;
-      m[c] = (m[c] ?? 0) + e.amount;
-    }
-    return m;
-  }
-
-  Future<Map<String, double>> _approxBucketsToTrip(
-      Map<String, double> buckets, String toCcy) async {
-    final out = <String, double>{};
-    for (final e in buckets.entries) {
-      final from = e.key.toUpperCase();
-      final amt  = e.value;
-      if (amt == 0) continue;
-
-      if (from == toCcy.toUpperCase()) {
-        out[from] = amt;
-      } else {
-        try {
-          out[from] = await widget.api.convert(amount: amt, from: from, to: toCcy);
-        } catch (_) {
-          out[from] = amt; // safe fallback
-        }
-      }
-    }
-    return out;
-  }
-
-
-
 // _openTripPicker method (final) start
   Future<void> _openTripPicker() async {
     final picked = await Navigator.of(context).push<Trip>(
@@ -198,96 +161,54 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // _openTripPicker method (final) end
 
-// --- recalc spent in trip currency start ---
-  Future<void> _recalcSpentInTripCurrency() async {
+// insights recalculation start
+  Future<void> _recalcInsights() async {
     final t = _activeTrip;
-    if (t == null) {
-      if (mounted) setState(() => _spentInTripCcy = 0.0);
-      return;
-    }
-    if (_recalcInFlight) return;
-    _recalcInFlight = true;
+    if (t == null || _insightsBusy) return;
+    _insightsBusy = true;
 
     try {
-      // 1) group all expenses by their own currency
-      final buckets = _bucketsByCurrency(); // e.g. { 'PLN': 50.0, 'INR': 300.0, ... }
+      // One FX table for fast local converts INTO the trip currency
+      final ratesToTrip = await FxService.loadRates(t.currency);
 
-      // 2) convert each bucket to the TRIP currency using the backend converter
-      double total = 0.0;
-      for (final entry in buckets.entries) {
-        final from = entry.key.toUpperCase();
-        final amt  = entry.value;
-        if (amt == 0) continue;
+      final byCcy = <String, double>{};
+      final byCcyTrip = <String, double>{};
+      final byCatTrip = <String, double>{};
+      double totalTrip = 0.0;
 
-        final converted = (from == t.currency.toUpperCase())
-            ? amt
-            : await widget.api.convert(amount: amt, from: from, to: t.currency);
+      for (final e in _expenses) {
+        final ccy = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
 
-        total += converted;
+        // 1) native sums (no FX)
+        byCcy.update(ccy, (v) => v + e.amount, ifAbsent: () => e.amount);
+
+        // 2) convert each line to trip currency once
+        final inTrip = FxService.convert(
+          amount: e.amount,
+          from: ccy,
+          to: t.currency,
+          ratesForBaseTo: ratesToTrip,
+        );
+        totalTrip += inTrip;
+        byCcyTrip.update(ccy, (v) => v + inTrip, ifAbsent: () => inTrip);
+
+        // 3) categories in trip currency
+        final cat = (e.category.isEmpty ? 'Other' : e.category);
+        byCatTrip.update(cat, (v) => v + inTrip, ifAbsent: () => inTrip);
       }
 
       if (!mounted) return;
-      setState(() => _spentInTripCcy = total);
-
-      // 👇 NEW: keep the “≈ home” line in sync with the fresh total
-      await _updateApproxHome();
-    } catch (e) {
-      // fallback: naive sum so the UI doesn't break
-      final fallback = _expenses.fold<double>(0.0, (p, e) => p + e.amount);
-      if (mounted) setState(() => _spentInTripCcy = fallback);
+      setState(() {
+        _sumByCurrency = byCcy;
+        _sumByCurrencyInTrip = byCcyTrip;
+        _sumByCategoryInTrip = byCatTrip;
+        _spentInTripCcy = totalTrip;
+      });
     } finally {
-      _recalcInFlight = false;
+      _insightsBusy = false;
     }
   }
-// --- recalc spent in trip currency end ---
-
-  Future<void> _recomputeInsights() async {
-    final t = _activeTrip;
-    if (t == null) return;
-
-    // 1) group by currency (raw)
-    final byCcy = <String, double>{};
-    for (final e in _expenses) {
-      final c = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
-      byCcy[c] = (byCcy[c] ?? 0) + e.amount;
-    }
-
-    // 2) convert every expense to trip currency (one FX table)
-    final rates = await FxService.loadRates(t.currency);
-    double sumBase = 0.0;
-    final byCatBase = <String, double>{};
-    for (final e in _expenses) {
-      final from = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
-      final base = FxService.convert(
-        amount: e.amount,
-        from: from,
-        to: t.currency,
-        ratesForBaseTo: rates,
-      );
-      sumBase += base;
-      final cat = (e.category.isEmpty ? 'Other' : e.category);
-      byCatBase[cat] = (byCatBase[cat] ?? 0) + base;
-    }
-
-    // 3) daily burn & days left
-    final daysSoFar = (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
-    final burn = sumBase / daysSoFar;
-    int? daysLeft;
-    final budget = (_tripBudgetOverride ?? t.initialBudget);
-    if (budget > 0 && burn > 0) {
-      final rem = (budget - sumBase);
-      daysLeft = rem <= 0 ? 0 : (rem / burn).ceil();
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _byCcy = byCcy;
-      _byCategoryBase = byCatBase;
-      _spentInBase = sumBase;
-      _dailyBurn = burn;
-      _daysLeft = daysLeft;
-    });
-  }
+// insights recalculation end
 
 
 
@@ -306,9 +227,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     });
 
 
-    await _recalcSpentInTripCurrency();
+    await _recalcInsights();
     await _updateApproxHome();
-    await _recomputeInsights();
   }
 // _loadLocal method end
 
@@ -353,7 +273,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
       // 3) refresh UI + totals
       await _loadLocal();
-      await _recalcSpentInTripCurrency();
       if (!silent && mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Expenses synced')));
@@ -647,8 +566,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             );
             await _box.add(e); // local first (Hive)
             setState(() => _expenses.insert(0, e));
-            await _recalcSpentInTripCurrency();
-            await _recomputeInsights();
+            await _recalcInsights();
             await _updateApproxHome();
 
             // 2) ALSO sync to server so Budgets can see it
@@ -923,7 +841,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                               );
                               if (!mounted) return;
                               await _loadTripBudgetOverride(); // refresh after returning
-                              await _recalcSpentInTripCurrency(); // 👈 NEW
+                              await _recalcInsights(); // 👈 NEW
                               await _updateApproxHome();          // 👈 NEW
                             },
                           ),
@@ -963,59 +881,22 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                             ),
                           ),
 
-                        // -----------------------
-                        // 👇 NEW: Per-currency breakdown (backend conversion, null-safe)
+                        // spent currencies list start
                         const SizedBox(height: 8),
-                        Text('Spent currencies:', style: Theme.of(context).textTheme.labelMedium),
-                        const SizedBox(height: 4),
-
-                        Builder(builder: (_) {
-                          final buckets = _bucketsByCurrency();     // build once to avoid rebuild drift
-                          final codes = buckets.keys.toList()..sort();
-                          if (codes.isEmpty) return const SizedBox.shrink();
-
-                          return FutureBuilder<Map<String, double>>(
-                            future: _approxBucketsToTrip(buckets, t.currency),
-                            builder: (_, snap) {
-                              final approx = snap.data; // may be null while waiting
-                              final rows = <Widget>[];
-
-                              for (final c in codes) {
-                                final raw = buckets[c] ?? 0.0;
-                                if (c.toUpperCase() == t.currency.toUpperCase()) {
-                                  rows.add(Text('${raw.toStringAsFixed(2)} $c'));
-                                } else if (approx == null || !approx.containsKey(c)) {
-                                  rows.add(Text.rich(TextSpan(children: [
-                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
-                                    TextSpan(
-                                      text: ' (≈ … ${t.currency})',
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ])));
-                                } else {
-                                  rows.add(Text.rich(TextSpan(children: [
-                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
-                                    TextSpan(
-                                      text: ' (≈ ${approx[c]!.toStringAsFixed(2)} ${t.currency})',
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ])));
-                                }
-                              }
-
-                              rows.add(const SizedBox(height: 4));
-                              rows.add(Text(
-                                'Total spent: ${_spentInTripCcy.toStringAsFixed(2)} ${t.currency}',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ));
-
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: rows,
-                              );
-                            },
+                        Text('Spent currencies:', style: Theme.of(context).textTheme.bodyMedium),
+                        ..._sumByCurrency.entries.map((entry) {
+                          final ccy = entry.key;
+                          final native = entry.value;
+                          final approx = _sumByCurrencyInTrip[ccy] ?? 0.0;
+                          if (ccy == _activeTrip!.currency) {
+                            return Text('${native.toStringAsFixed(2)} $ccy');
+                          }
+                          return Text(
+                            '${native.toStringAsFixed(2)} $ccy (≈ ${approx.toStringAsFixed(2)} ${_activeTrip!.currency})',
                           );
                         }),
+                        Text('Total spent: ${_spentInTripCcy.toStringAsFixed(2)} ${_activeTrip!.currency}'),
+                        // spent currencies list end
 
                       ],
                     );
@@ -1037,52 +918,58 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   // --- Insights (fixed math) ---
                   Text('Insights', style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 6),
-                  Row(
-                    children: [
-                      Text('Daily burn: ${_dailyBurn.toStringAsFixed(2)} ${t.currency}/day'),
-                      const SizedBox(width: 16),
-                      Text('Days left: ${_daysLeft ?? 0}'),
-                    ],
-                  ),
-                  const SizedBox(height: 6),
-                  Text('By category', style: Theme.of(context).textTheme.bodyMedium),
                   Builder(builder: (_) {
-                    if (_byCategoryBase.isEmpty) return const SizedBox.shrink();
-                    final max = _byCategoryBase.values.fold<double>(0, (p, v) => v > p ? v : p);
+                    final trip = _activeTrip!;
+                    final today = DateTime.now();
+                    final start = DateTime(trip.startDate.year, trip.startDate.month, trip.startDate.day);
+                    final end = DateTime(trip.endDate.year, trip.endDate.month, trip.endDate.day);
+
+                    // days used = at least 1
+                    final usedDays = (today.isAfter(start)
+                            ? today.difference(start).inDays + 1
+                            : 1)
+                        .clamp(1, 100000);
+                    final daysLeft = (today.isBefore(end)
+                            ? end.difference(today).inDays
+                            : 0)
+                        .clamp(0, 100000);
+                    final dailyBurn = _spentInTripCcy / usedDays;
+
+                    // simple category bars (percent of total)
+                    final total = _spentInTripCcy <= 0 ? 1.0 : _spentInTripCcy;
+
                     return Column(
-                      children: _byCategoryBase.entries.map((e) {
-                        final pct = max <= 0 ? 0.0 : (e.value / max).clamp(0.0, 1.0);
-                        return Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4),
-                          child: Row(
-                            children: [
-                              Expanded(
-                                child: LinearProgressIndicator(value: pct),
-                              ),
-                              const SizedBox(width: 8),
-                              SizedBox(
-                                width: 120,
-                                child: Text(
-                                  '${e.key} • ${e.value.toStringAsFixed(2)} ${t.currency}',
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            ],
-                          ),
-                        );
-                      }).toList(),
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Daily burn: ${dailyBurn.toStringAsFixed(2)} ${trip.currency}/day    Days left: $daysLeft'),
+                        const SizedBox(height: 8),
+                        Text('By category'),
+                        const SizedBox(height: 4),
+                        ..._sumByCategoryInTrip.entries.map((e) {
+                          final pct = (e.value / total).clamp(0.0, 1.0);
+                          return Padding(
+                            padding: const EdgeInsets.only(bottom: 6),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Row(children: [
+                                  Expanded(
+                                      child: ClipRRect(
+                                    borderRadius: BorderRadius.circular(4),
+                                    child: LinearProgressIndicator(value: pct, minHeight: 8),
+                                  )),
+                                  const SizedBox(width: 8),
+                                  Text('${e.value.toStringAsFixed(2)} ${trip.currency}'),
+                                ]),
+                                const SizedBox(height: 2),
+                                Text(e.key, style: Theme.of(context).textTheme.bodySmall),
+                              ],
+                            ),
+                          );
+                        }),
+                      ],
                     );
                   }),
-                  const SizedBox(height: 6),
-                  // “Spent currencies” lines (unchanged list but now also correct overall totals)
-                  if (_byCcy.isNotEmpty) ...[
-                    Text('Spent currencies:', style: Theme.of(context).textTheme.bodyMedium),
-                    ..._byCcy.entries.map((e) => Text(
-                          '${e.value.toStringAsFixed(2)} ${e.key}'
-                          '${e.key.toUpperCase() == t.currency.toUpperCase() ? '' : ' (≈ using FX)'}',
-                        )),
-                    Text('Total spent: ${_spentInBase.toStringAsFixed(2)} ${t.currency}'),
-                  ],
                 ],
               ),
             ),

@@ -30,8 +30,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   // cache last-loaded list to filter on it without refetch
   List<Expense> _all = [];
 
-  Map<String, double> _fltByCcy = <String, double>{};
-  double _fltApproxBase = 0.0;
+  // filtered totals state start
+  Map<String, double> _filteredByCurrency = <String, double>{};
+  double _filteredTotalInTrip = 0.0;
+  bool _filterBusy = false;
+  // filtered totals state end
 
   // convenience: detect “any filter active”
   bool get _hasFilters => _fCategory != null || _fCurrency != null || _fRange != null;
@@ -89,34 +92,46 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
   }
 
-  Future<void> _recomputeFilteredTotals(List<Expense> items) async {
-    final trip = _trip;
-    if (trip == null) return;
-
-    final byCcy = <String, double>{};
-    for (final e in items) {
-      final c = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
-      byCcy[c] = (byCcy[c] ?? 0) + e.amount;
-    }
-
-    final rates = await FxService.loadRates(trip.currency);
-    double sumBase = 0.0;
-    for (final e in items) {
-      final from = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
-      sumBase += FxService.convert(
-        amount: e.amount,
-        from: from,
-        to: trip.currency,
-        ratesForBaseTo: rates,
-      );
-    }
-
-    if (!mounted) return;
-    setState(() {
-      _fltByCcy = byCcy;
-      _fltApproxBase = sumBase;
+  // recalc filtered totals start
+  void _scheduleRecalcFilteredTotals(List<Expense> list) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _recalcFilteredTotals(list);
     });
   }
+
+  Future<void> _recalcFilteredTotals(List<Expense> list) async {
+    if (_trip == null || _filterBusy) return;
+    _filterBusy = true;
+    try {
+      // TODO: if you have real filters, apply them to `list` here.
+      final t = _trip!;
+      final ratesToTrip = await FxService.loadRates(t.currency);
+
+      final byCcy = <String, double>{};
+      double totalInTrip = 0.0;
+
+      for (final e in list) {
+        final ccy = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
+        byCcy.update(ccy, (v) => v + e.amount, ifAbsent: () => e.amount);
+
+        totalInTrip += FxService.convert(
+          amount: e.amount,
+          from: ccy,
+          to: t.currency,
+          ratesForBaseTo: ratesToTrip,
+        );
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _filteredByCurrency = byCcy;
+        _filteredTotalInTrip = totalInTrip;
+      });
+    } finally {
+      _filterBusy = false;
+    }
+  }
+  // recalc filtered totals end
 
   Future<void> _exportCsv(List<Expense> list) async {
     if (_trip == null || list.isEmpty) {
@@ -222,9 +237,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
           // apply filters
           final expenses = _applyFilters(_all);
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _recomputeFilteredTotals(expenses);
-          });
+          _scheduleRecalcFilteredTotals(expenses);
 
           // --- FILTER BAR ---
           final cats = _categoriesOf(_all).toList()..sort();
@@ -339,11 +352,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     children: [
                       Text('Filtered totals', style: Theme.of(context).textTheme.titleSmall),
                       const SizedBox(height: 6),
-                      ..._fltByCcy.entries.map((e) => Text(
+                      ..._filteredByCurrency.entries.map((e) => Text(
                             '${e.value.toStringAsFixed(2)} ${e.key}',
                           )),
-                      if (_trip != null)
-                        Text('≈ ${_fltApproxBase.toStringAsFixed(2)} ${_trip!.currency}'),
+                      const SizedBox(height: 6),
+                      Text('≈ ${_filteredTotalInTrip.toStringAsFixed(2)} ${_trip?.currency ?? ''}'),
                     ],
                   ),
                 ),
