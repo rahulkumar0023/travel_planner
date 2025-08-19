@@ -49,8 +49,10 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
+  // --- multi-currency spent state ---
+  final Map<String, double> _spentByCurrency = <String, double>{};
   double _spentInTripCcy = 0.0;
-  bool _recalcInFlight = false; // just to avoid overlapping recalcs
+  bool _recalcInFlight = false;
 
   Trip? _activeTrip;
   late final Box<Expense> _box;
@@ -105,7 +107,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   @override
   void didUpdateWidget(covariant DashboardScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _recomputeInsights();
+    _loadLocal().then((_) => _recalcSpentInTripCurrency());
     final id = _activeTrip?.id;
     if (id != null) {
       ArchivedTripsStore.isArchived(id).then((v) {
@@ -116,9 +118,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
   }
 
-
-  double get _totalSpent =>
-      _expenses.fold<double>(0, (sum, e) => sum + e.amount);
 
   // _ensureActiveTrip method start
   Future<void> _ensureActiveTrip() async {
@@ -143,41 +142,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // _ensureActiveTrip method end
 
-  // --- spend buckets helpers start ---
-// Group local expenses by their *own* currency (PLN/EUR/TRY/etc.)
-  Map<String, double> _bucketsByCurrency() {
-    final m = <String, double>{};
-    final tripCcy = _activeTrip?.currency ?? 'EUR';
-    for (final e in _expenses) {
-      final c = (e.currency.isEmpty) ? tripCcy : e.currency;
-      m[c] = (m[c] ?? 0) + e.amount;
-    }
-    return m;
-  }
-
-  Future<Map<String, double>> _approxBucketsToTrip(
-      Map<String, double> buckets, String toCcy) async {
-    final out = <String, double>{};
-    for (final e in buckets.entries) {
-      final from = e.key.toUpperCase();
-      final amt  = e.value;
-      if (amt == 0) continue;
-
-      if (from == toCcy.toUpperCase()) {
-        out[from] = amt;
-      } else {
-        try {
-          out[from] = await widget.api.convert(amount: amt, from: from, to: toCcy);
-        } catch (_) {
-          out[from] = amt; // safe fallback
-        }
-      }
-    }
-    return out;
-  }
-
-
-
 // _openTripPicker method (final) start
   Future<void> _openTripPicker() async {
     final picked = await Navigator.of(context).push<Trip>(
@@ -198,48 +162,51 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // _openTripPicker method (final) end
 
-// --- recalc spent in trip currency start ---
+// Recalculate _spentByCurrency and _spentInTripCcy using FxService (base = trip currency)
   Future<void> _recalcSpentInTripCurrency() async {
     final t = _activeTrip;
     if (t == null) {
-      if (mounted) setState(() => _spentInTripCcy = 0.0);
+      if (mounted) {
+        setState(() {
+          _spentByCurrency.clear();
+          _spentInTripCcy = 0.0;
+        });
+      }
       return;
     }
     if (_recalcInFlight) return;
     _recalcInFlight = true;
 
     try {
-      // 1) group all expenses by their own currency
-      final buckets = _bucketsByCurrency(); // e.g. { 'PLN': 50.0, 'INR': 300.0, ... }
+      final base = t.currency.toUpperCase();
+      final rates = await FxService.loadRates(base); // cached by base
 
-      // 2) convert each bucket to the TRIP currency using the backend converter
+      final by = <String, double>{};
       double total = 0.0;
-      for (final entry in buckets.entries) {
-        final from = entry.key.toUpperCase();
-        final amt  = entry.value;
-        if (amt == 0) continue;
 
-        final converted = (from == t.currency.toUpperCase())
-            ? amt
-            : await widget.api.convert(amount: amt, from: from, to: t.currency);
+      for (final e in _expenses) {
+        final from = (e.currency.isEmpty ? base : e.currency).toUpperCase();
+        by[from] = (by[from] ?? 0) + e.amount;
 
-        total += converted;
+        total += FxService.convert(
+          amount: e.amount,
+          from: from,
+          to: base,
+          ratesForBaseTo: rates,
+        );
       }
 
       if (!mounted) return;
-      setState(() => _spentInTripCcy = total);
-
-      // 👇 NEW: keep the “≈ home” line in sync with the fresh total
-      await _updateApproxHome();
-    } catch (e) {
-      // fallback: naive sum so the UI doesn't break
-      final fallback = _expenses.fold<double>(0.0, (p, e) => p + e.amount);
-      if (mounted) setState(() => _spentInTripCcy = fallback);
+      setState(() {
+        _spentByCurrency
+          ..clear()
+          ..addAll(by);
+        _spentInTripCcy = total;
+      });
     } finally {
       _recalcInFlight = false;
     }
   }
-// --- recalc spent in trip currency end ---
 
   Future<void> _recomputeInsights() async {
     final t = _activeTrip;
@@ -733,9 +700,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       );
     }
 
-    final spent = _totalSpent;
-    final remaining = (t.initialBudget) - spent;
-
     return Scaffold(
       appBar: AppBar(
         // AppBar two-line title start
@@ -867,7 +831,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   Builder(builder: (context) {
                     // assumes you already added:
                     // - double? _tripBudgetOverride;
-                    // - double _totalSpent; (your existing spent computation)
+                    // - double _spentInTripCcy; // FX-correct spent total
                     // - double? _approxHomeValue; String? _homeCurrencyCode; (optional approx line)
                     // - import 'budgets_screen.dart';
                     final t = _activeTrip!;
@@ -963,59 +927,39 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                             ),
                           ),
 
-                        // -----------------------
-                        // 👇 NEW: Per-currency breakdown (backend conversion, null-safe)
+                        // Spent-by-currency breakdown (with approx to trip currency)
                         const SizedBox(height: 8),
-                        Text('Spent currencies:', style: Theme.of(context).textTheme.labelMedium),
+                        Text('Spent currencies:', style: Theme.of(context).textTheme.bodySmall),
                         const SizedBox(height: 4),
-
-                        Builder(builder: (_) {
-                          final buckets = _bucketsByCurrency();     // build once to avoid rebuild drift
-                          final codes = buckets.keys.toList()..sort();
-                          if (codes.isEmpty) return const SizedBox.shrink();
-
-                          return FutureBuilder<Map<String, double>>(
-                            future: _approxBucketsToTrip(buckets, t.currency),
-                            builder: (_, snap) {
-                              final approx = snap.data; // may be null while waiting
-                              final rows = <Widget>[];
-
-                              for (final c in codes) {
-                                final raw = buckets[c] ?? 0.0;
-                                if (c.toUpperCase() == t.currency.toUpperCase()) {
-                                  rows.add(Text('${raw.toStringAsFixed(2)} $c'));
-                                } else if (approx == null || !approx.containsKey(c)) {
-                                  rows.add(Text.rich(TextSpan(children: [
-                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
-                                    TextSpan(
-                                      text: ' (≈ … ${t.currency})',
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ])));
-                                } else {
-                                  rows.add(Text.rich(TextSpan(children: [
-                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
-                                    TextSpan(
-                                      text: ' (≈ ${approx[c]!.toStringAsFixed(2)} ${t.currency})',
-                                      style: Theme.of(context).textTheme.bodySmall,
-                                    ),
-                                  ])));
-                                }
-                              }
-
-                              rows.add(const SizedBox(height: 4));
-                              rows.add(Text(
-                                'Total spent: ${_spentInTripCcy.toStringAsFixed(2)} ${t.currency}',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ));
-
-                              return Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: rows,
+                        ..._spentByCurrency.entries.map((entry) {
+                          final ccy = entry.key;
+                          final amt = entry.value;
+                          if (ccy.toUpperCase() == _activeTrip!.currency.toUpperCase()) {
+                            return Text('${amt.toStringAsFixed(2)} $ccy');
+                          }
+                          // show ≈ line using FxService (cached)
+                          return FutureBuilder<double>(
+                            future: () async {
+                              final base = _activeTrip!.currency.toUpperCase();
+                              final rates = await FxService.loadRates(base);
+                              return FxService.convert(
+                                amount: amt,
+                                from: ccy.toUpperCase(),
+                                to: base,
+                                ratesForBaseTo: rates,
                               );
+                            }(),
+                            builder: (_, snap) {
+                              final approx = snap.data;
+                              final approxTxt = (approx == null)
+                                  ? ''
+                                  : ' (≈ ${approx.toStringAsFixed(2)} ${_activeTrip!.currency})';
+                              return Text('${amt.toStringAsFixed(2)} $ccy$approxTxt');
                             },
                           );
-                        }),
+                        }).toList(),
+                        Text('Total spent: ${_spentInTripCcy.toStringAsFixed(2)} ${_activeTrip!.currency}',
+                            style: Theme.of(context).textTheme.bodySmall),
 
                       ],
                     );
@@ -1077,10 +1021,12 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   // “Spent currencies” lines (unchanged list but now also correct overall totals)
                   if (_byCcy.isNotEmpty) ...[
                     Text('Spent currencies:', style: Theme.of(context).textTheme.bodyMedium),
-                    ..._byCcy.entries.map((e) => Text(
-                          '${e.value.toStringAsFixed(2)} ${e.key}'
-                          '${e.key.toUpperCase() == t.currency.toUpperCase() ? '' : ' (≈ using FX)'}',
-                        )),
+                    ..._byCcy.entries.map((e) {
+                      final approx = e.key.toUpperCase() == t.currency.toUpperCase()
+                          ? ''
+                          : ' (≈ using FX)';
+                      return Text('${e.value.toStringAsFixed(2)} ${e.key}$approx');
+                    }),
                     Text('Total spent: ${_spentInBase.toStringAsFixed(2)} ${t.currency}'),
                   ],
                 ],
