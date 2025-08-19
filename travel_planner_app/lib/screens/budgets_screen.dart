@@ -507,6 +507,33 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     }
   }
 
+  Future<double> _sumLinkedSpentInMonthly({
+    required Budget monthlyBudget,
+    required List<Budget> allTrips,
+  }) async {
+    final linkedTrips =
+        allTrips.where((tb) => tb.linkedMonthlyBudgetId == monthlyBudget.id).toList();
+    if (linkedTrips.isEmpty) return 0.0;
+
+    try {
+      final rates = await FxService.loadRates(monthlyBudget.currency);
+      double sum = 0.0;
+      for (final tb in linkedTrips) {
+        final spentInTripCcy = _spentByTrip[tb.tripId ?? ''] ?? 0.0;
+        sum += FxService.convert(
+          amount: spentInTripCcy,
+          from: tb.currency,
+          to: monthlyBudget.currency,
+          ratesForBaseTo: rates,
+        );
+      }
+      return sum;
+    } catch (_) {
+      return linkedTrips.fold<double>(
+          0.0, (p, tb) => p + (_spentByTrip[tb.tripId ?? ''] ?? 0.0));
+    }
+  }
+
 
   @override
   Widget build(BuildContext context) {
@@ -571,20 +598,21 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                             ? '${m.name} • ${m.amount.toStringAsFixed(0)} ${m.currency}'
                             : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
                       ),
-                      subtitle: Builder(builder: (ctx) {
-                        // find all trip budgets that link to this monthly budget
-                        final linkedTrips = trips.where((tb) => tb.linkedMonthlyBudgetId == m.id);
-                        final spent = linkedTrips.fold<double>(0.0, (p, tb) => p + (_spentByTrip[tb.tripId ?? ''] ?? 0.0));
-                        final remaining = (m.amount) - spent;
-                        return Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text('Total: ${_money(m.currency, m.amount)}'),
-                            Text('Spent: ${_money(m.currency, spent)}'),
-                            Text('Remaining: ${_money(m.currency, remaining)}'),
-                          ],
-                        );
-                      }),
+                      subtitle: FutureBuilder<double>(
+                        future: _sumLinkedSpentInMonthly(monthlyBudget: m, allTrips: trips),
+                        builder: (ctx, snapSpent) {
+                          final spent = snapSpent.data ?? 0.0;
+                          final remaining = (m.amount) - spent;
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Total: ${_money(m.currency, m.amount)}'),
+                              Text('Spent: ${_money(m.currency, spent)}'),
+                              Text('Remaining: ${_money(m.currency, remaining)}'),
+                            ],
+                          );
+                        },
+                      ),
                       trailing: PopupMenuButton<String>(
                         onSelected: (v) {
                           if (v == 'edit') _editMonthly(m);
