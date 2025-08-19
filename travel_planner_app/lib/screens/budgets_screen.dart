@@ -5,6 +5,7 @@ import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
 import '../services/budgets_sync.dart';
 import '../services/archived_trips_store.dart';
+import '../services/outbox_service.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -328,8 +329,12 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       await widget.api.deleteBudget(b.id);
       await _refresh(); BudgetsSync.instance.bump();
       _showSnack('Budget deleted');
-    } catch (e) {
-      _showSnack('Could not delete: $e');
+    } catch (_) {
+      await OutboxService.enqueue(OutboxOp(
+        method: 'DELETE',
+        path: '/budgets/${b.id}',
+      ));
+      _showSnack('Queued deletion — will sync when online');
     }
   }
 

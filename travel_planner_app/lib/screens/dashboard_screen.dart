@@ -8,6 +8,7 @@ import '../models/budget.dart';
 import '../models/currencies.dart';
 
 import 'dart:io';
+import 'dart:convert';
 
 import '../services/api_service.dart';
 import '../services/prefs_service.dart';
@@ -16,6 +17,7 @@ import '../services/local_trip_store.dart'; // <-- keep
 import '../services/participants_service.dart';
 import '../services/fx_service.dart';
 import '../services/archived_trips_store.dart';
+import '../services/outbox_service.dart';
 
 import 'expense_form_screen.dart';
 import 'group_balance_screen.dart';
@@ -46,7 +48,7 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> {
+class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   double _spentInTripCcy = 0.0;
   bool _recalcInFlight = false; // just to avoid overlapping recalcs
 
@@ -75,6 +77,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _flushOutbox();
     _box = Hive.box<Expense>('expensesBox');
     _boot(); // 👈 NEW
 
@@ -665,11 +669,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
             try {
               await widget.api.addExpense(e);
             } catch (err) {
-              if (!mounted) return;
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text('Saved locally. Server sync failed: $err')),
-              );
+              await OutboxService.enqueue(OutboxOp(
+                method: 'POST',
+                path: '/expenses',
+                jsonBody: jsonEncode(e.toJson()),
+              ));
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Saved offline — will sync automatically')),
+                );
               }
+            }
           },
         ),
       ),
@@ -681,8 +691,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
   // 👇 NEW: dispose listener start
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     BudgetsSync.instance.removeListener(_onBudgetsChanged);
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _flushOutbox();
+    }
+  }
+
+  Future<void> _flushOutbox() async {
+    final sent = await OutboxService.flush(
+      urlFor: widget.api.urlFor,
+      headers: widget.api.headers,
+    );
+    if (sent > 0 && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Synced $sent pending item(s)')),
+      );
+    }
+    setState(() {});
   }
 // 👇 NEW: dispose listener end
 
@@ -738,6 +769,36 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         // AppBar two-line title end
         actions: [
+          // OUTBOX BADGE
+          FutureBuilder<int>(
+            future: OutboxService.count(),
+            builder: (_, snap) {
+              final cnt = snap.data ?? 0;
+              return Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  IconButton(
+                    tooltip: cnt == 0 ? 'All synced' : 'Pending sync',
+                    onPressed: _flushOutbox,
+                    icon: Icon(cnt == 0 ? Icons.cloud_done_outlined : Icons.cloud_off_outlined),
+                  ),
+                  if (cnt > 0)
+                    Positioned(
+                      right: 10,
+                      top: 10,
+                      child: Container(
+                        width: 8,
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: Theme.of(context).colorScheme.error,
+                          shape: BoxShape.circle,
+                        ),
+                      ),
+                    ),
+                ],
+              );
+            },
+          ),
           IconButton(
             onPressed: _openTripPicker,
             icon: const Icon(Icons.swap_horiz),

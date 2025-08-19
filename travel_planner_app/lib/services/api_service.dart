@@ -44,6 +44,12 @@ class ApiService {
     return h;
   }
 
+  // public helper for outbox
+  Uri urlFor(String path) => Uri.parse('$baseUrl$path');
+
+  // expose headers for outbox (wraps your private _headers)
+  Map<String, String> headers(bool json) => _headers(jsonBody: json);
+
   // -----------------------------
   // Auth
   // -----------------------------
