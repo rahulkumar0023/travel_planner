@@ -33,6 +33,12 @@ class _AppShellState extends State<AppShell> {
     super.initState();
     _activeTrip = TripStorageService.loadLightweight();
 
+    // ===== App start: sync pending expenses start =====
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.api.syncPendingExpensesIfOnline();
+    });
+    // ===== App start: sync pending expenses end =====
+
     // If no trip is selected yet, open the picker after first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (_activeTrip == null && mounted) {

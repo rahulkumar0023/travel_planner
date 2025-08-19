@@ -4,26 +4,21 @@ import '../services/local_budget_store.dart';
 import '../models/budget.dart';
 import '../services/trip_storage_service.dart';
 import '../models/currencies.dart';
+import '../services/api_service.dart';
+import '../models/expense.dart';
 
 class ExpenseFormScreen extends StatefulWidget {
   const ExpenseFormScreen({
     super.key,
+    required this.api,
     required this.participants,
-    required this.onSubmit,
     this.defaultCurrency,
     this.availableCurrencies, // 👈 NEW
   });
 
+  final ApiService api;
   final List<String> participants;
   final List<String>? availableCurrencies; // 👈 NEW
-  final void Function({
-    required String title,
-    required double amount,
-    required String category,
-    required String paidBy,
-    required List<String> sharedWith,
-    required String currency,        // <-- add this line
-  }) onSubmit;
   final String? defaultCurrency;
 
 
@@ -78,19 +73,25 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 // expense form initState fix end
 
 
-  void _save() {
+  Future<void> _save() async {
     final title = _title.text.trim();
     final amount = double.tryParse(_amount.text.trim()) ?? 0;
     if (title.isEmpty || amount <= 0 || _shared.isEmpty) return;
-    widget.onSubmit(
+    final trip = TripStorageService.loadLightweight();
+    if (trip == null) return;
+    final newExpense = Expense(
+      id: '',
+      tripId: trip.id,
       title: title,
       amount: amount,
       category: _category,
+      date: DateTime.now(),
       paidBy: _paidBy,
       sharedWith: _shared.toList(),
-      currency: _expenseCurrency, // <-- pass the chosen currency
+      currency: _expenseCurrency,
     );
-    Navigator.pop(context);
+    await widget.api.createExpense(newExpense);
+    if (mounted) Navigator.pop(context);
   }
 
   @override

@@ -5,11 +5,18 @@ import 'package:http/http.dart' as http;
 
 import '../models/balance_row.dart';
 import '../models/budget.dart';
-import '../models/expense.dart';
 import '../models/trip.dart';
 import 'local_budget_store.dart';
 import 'dart:async';
 import 'local_trip_store.dart';
+// ===== Expenses imports start =====
+import 'package:connectivity_plus/connectivity_plus.dart';
+import 'local_expense_store.dart';
+import 'pending_ops_queue.dart';
+import '../models/expense.dart';
+import 'budgets_sync.dart';
+import 'package:hive/hive.dart';
+// ===== Expenses imports end =====
 
 class _FxCache {
   _FxCache(this.rate, this.ts);
@@ -25,6 +32,10 @@ class ApiService {
   String? _authToken;
   bool lastBudgetsFromCache = false;
   bool lastTripsFromCache = false;
+// ===== Expenses lastFromCache flag start =====
+  bool lastExpensesFromCache = false;
+// ===== Expenses lastFromCache flag end =====
+  final Box<Expense> _expensesBox = Hive.box<Expense>('expensesBox');
 
 // --- FX cache (1h TTL) ---
   final Map<String, _FxCache> _fx = {}; // key: 'FROM_TO'
@@ -128,49 +139,216 @@ class ApiService {
     }
   }
 
-  // -----------------------------
-  // Expenses
-  // -----------------------------
-  Future<List<Expense>> fetchExpenses(String tripId) async {
-    final res = await http.get(
-      Uri.parse('$baseUrl/expenses/$tripId'),
-      headers: _headers(),
+  // ----------------------------- // Expenses fetch list start
+  // fetchExpensesOrCache method start
+  Future<List<Expense>> fetchExpensesOrCache(String tripId) async {
+    try {
+      final res = await http.get(Uri.parse('$baseUrl/expenses?tripId=$tripId'), headers: _headers());
+      if (res.statusCode == 200) {
+        final list = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
+        final expenses = list.map((m) => Expense.fromJson(m)).toList();
+        await LocalExpenseStore.saveExpensesForTrip(tripId, expenses);
+        lastExpensesFromCache = false;
+        return expenses;
+      }
+      final cached = await LocalExpenseStore.loadExpensesForTrip(tripId);
+      lastExpensesFromCache = true;
+      return cached;
+    } catch (_) {
+      final cached = await LocalExpenseStore.loadExpensesForTrip(tripId);
+      lastExpensesFromCache = true;
+      return cached;
+    }
+  }
+  // fetchExpensesOrCache method end
+  // ----------------------------- // Expenses fetch list end
+
+  // create Expense start
+  Future<Expense> createExpense(Expense draft) async {
+    final local = Expense(
+      id: draft.id,
+      tripId: draft.tripId,
+      title: draft.title,
+      amount: draft.amount,
+      category: draft.category,
+      date: draft.date,
+      paidBy: draft.paidBy,
+      sharedWith: draft.sharedWith,
+      currency: draft.currency,
     );
-    if (res.statusCode == 200) {
-      final List data = jsonDecode(res.body);
-      return data.map((e) => Expense.fromJson(e)).toList();
-    }
-    throw Exception('Failed to load expenses (${res.statusCode})');
-  }
+    await _expensesBox.add(local);
+    BudgetsSync.bump();
 
-  Future<void> addExpense(Expense e) async {
-    final res = await http.post(
-      Uri.parse('$baseUrl/expenses'),
-      headers: _headers(jsonBody: true),
-      body: jsonEncode(e.toJson()),
-    );
-    if (res.statusCode != 200 && res.statusCode != 201) {
-      throw Exception('Failed to add expense (${res.statusCode})');
-    }
-  }
-
-  Future<Expense> updateExpense(Expense e) async {
-    final uri = Uri.parse('$baseUrl/expenses/${e.id}');
-    final res = await http.put(uri, headers: _headers(jsonBody: true), body: jsonEncode(e.toJson()));
-    if (res.statusCode != 200) {
-      throw Exception('Failed to update expense (${res.statusCode}) ${res.body}');
-    }
-    return Expense.fromJson(jsonDecode(res.body));
-  }
-
-
-  Future<void> deleteExpense(String id) async {
-    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: _headers());
-    if (res.statusCode != 204 && res.statusCode != 200) {
-      throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
+    try {
+      final res = await http.post(
+        Uri.parse('$baseUrl/expenses'),
+        headers: _headers(jsonBody: true),
+        body: jsonEncode(draft.toJson()),
+      );
+      if (res.statusCode == 201) {
+        final created = Expense.fromJson(jsonDecode(res.body));
+        await _replaceLocalExpense(local, created);
+        if (created.tripId.isNotEmpty) {
+          final fresh = await fetchExpensesOrCache(created.tripId);
+          await _reSeedHiveForTrip(created.tripId, fresh);
+        }
+        BudgetsSync.bump();
+        return created;
+      }
+      await PendingOpsQueue.enqueue({'op': 'create', 'payload': draft.toJson()});
+      return local;
+    } catch (_) {
+      await PendingOpsQueue.enqueue({'op': 'create', 'payload': draft.toJson()});
+      return local;
     }
   }
+  // create Expense end
 
+  // update Expense start
+  Future<Expense> updateExpense(Expense updated) async {
+    await _updateLocalExpense(updated);
+    BudgetsSync.bump();
+
+    try {
+      final res = await http.patch(
+        Uri.parse('$baseUrl/expenses/${updated.id}'),
+        headers: _headers(jsonBody: true),
+        body: jsonEncode(updated.toJson()),
+      );
+      if (res.statusCode == 200) {
+        final server = Expense.fromJson(jsonDecode(res.body));
+        await _updateLocalExpense(server);
+        if (server.tripId.isNotEmpty) {
+          final fresh = await fetchExpensesOrCache(server.tripId);
+          await _reSeedHiveForTrip(server.tripId, fresh);
+        }
+        BudgetsSync.bump();
+        return server;
+      }
+      await PendingOpsQueue.enqueue({'op': 'update', 'payload': updated.toJson()});
+      return updated;
+    } catch (_) {
+      await PendingOpsQueue.enqueue({'op': 'update', 'payload': updated.toJson()});
+      return updated;
+    }
+  }
+  // update Expense end
+
+  // delete Expense start
+  Future<void> deleteExpense(Expense e) async {
+    await _deleteLocalExpense(e);
+    BudgetsSync.bump();
+
+    try {
+      final res = await http.delete(
+        Uri.parse('$baseUrl/expenses/${e.id}'),
+        headers: _headers(),
+      );
+      if (res.statusCode == 200 || res.statusCode == 204) {
+        if (e.tripId.isNotEmpty) {
+          final fresh = await fetchExpensesOrCache(e.tripId);
+          await _reSeedHiveForTrip(e.tripId, fresh);
+        }
+        BudgetsSync.bump();
+        return;
+      }
+      await PendingOpsQueue.enqueue({'op': 'delete', 'payload': e.toJson()});
+    } catch (_) {
+      await PendingOpsQueue.enqueue({'op': 'delete', 'payload': e.toJson()});
+    }
+  }
+  // delete Expense end
+
+  // expenses syncPending start
+  Future<void> syncPendingExpensesIfOnline() async {
+    final connectivity = await Connectivity().checkConnectivity();
+    if (connectivity == ConnectivityResult.none) return;
+
+    final items = await PendingOpsQueue.drain();
+    for (final item in items) {
+      final op = item['op'] as String;
+      final payload = Map<String, dynamic>.from(item['payload'] as Map);
+      try {
+        if (op == 'create') {
+          await http.post(
+            Uri.parse('$baseUrl/expenses'),
+            headers: _headers(jsonBody: true),
+            body: jsonEncode(payload),
+          );
+        } else if (op == 'update') {
+          final id = payload['id'];
+          await http.patch(
+            Uri.parse('$baseUrl/expenses/$id'),
+            headers: _headers(jsonBody: true),
+            body: jsonEncode(payload),
+          );
+        } else if (op == 'delete') {
+          final id = payload['id'];
+          await http.delete(
+            Uri.parse('$baseUrl/expenses/$id'),
+            headers: _headers(),
+          );
+        }
+      } catch (_) {
+        await PendingOpsQueue.enqueue(item);
+      }
+    }
+    BudgetsSync.bump();
+  }
+  // expenses syncPending end
+
+  // ===== Expenses helpers start =====
+  // _replaceLocalExpense start
+  Future<void> _replaceLocalExpense(Expense optimistic, Expense server) async {
+    final idx = _expensesBox.values.toList().indexWhere((e) {
+      return e.id == optimistic.id ||
+          (e.title == optimistic.title && e.amount == optimistic.amount && e.date == optimistic.date);
+    });
+    if (idx >= 0) {
+      final key = _expensesBox.keyAt(idx);
+      await _expensesBox.put(key, server);
+    } else {
+      await _expensesBox.add(server);
+    }
+  }
+  // _replaceLocalExpense end
+
+  // _updateLocalExpense start
+  Future<void> _updateLocalExpense(Expense e) async {
+    final idx = _expensesBox.values.toList().indexWhere((x) => x.id == e.id);
+    if (idx >= 0) {
+      final key = _expensesBox.keyAt(idx);
+      await _expensesBox.put(key, e);
+    }
+  }
+  // _updateLocalExpense end
+
+  // _deleteLocalExpense start
+  Future<void> _deleteLocalExpense(Expense e) async {
+    final idx = _expensesBox.values.toList().indexWhere((x) => x.id == e.id);
+    if (idx >= 0) {
+      final key = _expensesBox.keyAt(idx);
+      await _expensesBox.delete(key);
+    }
+  }
+  // _deleteLocalExpense end
+
+  // _reSeedHiveForTrip start
+  Future<void> _reSeedHiveForTrip(String tripId, List<Expense> fresh) async {
+    final keysToDelete = <dynamic>[];
+    for (var i = 0; i < _expensesBox.length; i++) {
+      final v = _expensesBox.getAt(i) as Expense;
+      if (v.tripId == tripId) {
+        keysToDelete.add(_expensesBox.keyAt(i));
+      }
+    }
+    await _expensesBox.deleteAll(keysToDelete);
+    for (final e in fresh) {
+      await _expensesBox.add(e);
+    }
+  }
+  // _reSeedHiveForTrip end
+  // ===== Expenses helpers end =====
 
   // -----------------------------
   // Balances + Settle Up

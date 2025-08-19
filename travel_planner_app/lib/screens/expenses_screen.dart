@@ -22,13 +22,13 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     super.initState();
     _trip = TripStorageService.loadLightweight();
     // 1) show local instantly (if dashboard saved anything to Hive)
-    _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpenses(_trip!.id);
+    _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpensesOrCache(_trip!.id);
   }
 
   Future<void> _refresh() async {
     _trip = TripStorageService.loadLightweight();
     setState(() {
-      _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpenses(_trip!.id);
+      _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpensesOrCache(_trip!.id);
     });
     await _future;
   }
@@ -137,11 +137,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 ],
               );
             }
+            final usingCache = widget.api.lastExpensesFromCache;
             return ListView.separated(
-              itemCount: expenses.length,
+              itemCount: expenses.length + (usingCache ? 1 : 0),
               separatorBuilder: (_, __) => const Divider(height: 1),
               itemBuilder: (_, i) {
-                final e = expenses[i];
+                if (usingCache && i == 0) {
+                  return Container(
+                    padding: const EdgeInsets.all(12),
+                    color: Theme.of(context).colorScheme.surfaceVariant,
+                    child: const Text('Showing cached expenses (offline or server unavailable). Pull to refresh.'),
+                  );
+                }
+                final idx = usingCache ? i - 1 : i;
+                final e = expenses[idx];
                 return ListTile(
                   title: Text(e.title),
                   subtitle: Text('${e.category} • ${e.paidBy}'),
@@ -151,7 +160,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         await _editExpenseDialog(e);
                         await _refresh();
                       } else if (v == 'delete') {
-                        await widget.api.deleteExpense(e.id);
+                        await widget.api.deleteExpense(e);
                         await _refresh();
                       }
                     },

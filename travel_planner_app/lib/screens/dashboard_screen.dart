@@ -384,36 +384,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
     await Navigator.of(context).push(
       MaterialPageRoute(
         builder: (_) => ExpenseFormScreen(
+          api: widget.api,
           participants: participants,
           defaultCurrency: t.currency,
           availableCurrencies: availableCurrencies, // 👈 pass choices here
-          onSubmit: ({
-            required String title,
-            required double amount,
-            required String category,
-            required String paidBy,
-            required List<String> sharedWith,
-            required String currency, // <-- new param
-          }) async {
-            final e = Expense(
-              id: DateTime.now().toIso8601String(),
-              tripId: t.id,
-              title: title,
-              amount: amount,
-              category: category,
-              date: DateTime.now(),
-              paidBy: paidBy,
-              sharedWith: sharedWith,
-              currency : currency, // <-- new param
-            );
-            await _box.add(e); // local first (Hive)
-            setState(() => _expenses.insert(0, e));
-            await _recalcSpentInTripCurrency();
-            await _updateApproxHome();
-          },
         ),
       ),
     );
+    await _loadLocal();
   }
 
 
