@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'dart:io';
+import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/expense.dart';
@@ -8,6 +9,8 @@ import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/budget.dart'; // for BudgetKind
 import 'receipt_viewer_screen.dart';
+import '../services/fx_service.dart';
+import '../services/outbox_service.dart';
 
 class ExpensesScreen extends StatefulWidget {
   final ApiService api;
@@ -20,41 +23,169 @@ class ExpensesScreen extends StatefulWidget {
 class _ExpensesScreenState extends State<ExpensesScreen> {
   late Future<List<Expense>> _future;
   Trip? _trip;
+  List<Expense> _expenses = [];
 
   // Filters
-  String? _filterCategory;
-  String? _filterCurrency;
-  DateTimeRange? _filterRange;
+  String? _fCategory;
+  String? _fCurrency;
+  DateTimeRange? _fRange;
 
-  // Helpers
-  List<Expense> _applyFilters(List<Expense> all) {
-    Iterable<Expense> cur = all;
-
-    if (_filterCategory != null) {
-      cur = cur.where((e) => (e.category).toLowerCase() == _filterCategory!.toLowerCase());
-    }
-    if (_filterCurrency != null) {
-      cur = cur.where((e) => (e.currency).toUpperCase() == _filterCurrency!.toUpperCase());
-    }
-    if (_filterRange != null) {
-      final from = DateTime(_filterRange!.start.year, _filterRange!.start.month, _filterRange!.start.day);
-      final to = DateTime(_filterRange!.end.year, _filterRange!.end.month, _filterRange!.end.day, 23, 59, 59);
-      cur = cur.where((e) => e.date.isAfter(from.subtract(const Duration(milliseconds: 1))) && e.date.isBefore(to.add(const Duration(milliseconds: 1))));
-    }
-    final list = cur.toList()..sort((a, b) => b.date.compareTo(a.date));
-    return list;
+  // Cache last filters per trip
+  String get _filterKey {
+    final id = _trip?.id ?? 'no_trip';
+    return 'filters_$id';
   }
 
-  Map<String, double> _sumByCurrency(List<Expense> list) {
-    final map = <String, double>{};
+  List<Expense> _applyFilters(List<Expense> list) {
+    return list.where((e) {
+      if (_fCategory != null && _fCategory!.isNotEmpty && e.category != _fCategory) return false;
+      if (_fCurrency != null && _fCurrency!.isNotEmpty && (e.currency.toUpperCase() != _fCurrency)) return false;
+      if (_fRange != null) {
+        final d = DateTime(e.date.year, e.date.month, e.date.day);
+        if (d.isBefore(_fRange!.start) || d.isAfter(_fRange!.end)) return false;
+      }
+      return true;
+    }).toList();
+  }
+
+  Map<String, double> _sumPerCurrency(List<Expense> list) {
+    final m = <String, double>{};
     for (final e in list) {
-      final c = (e.currency).toUpperCase();
-      map[c] = (map[c] ?? 0) + e.amount;
+      final c = e.currency.toUpperCase();
+      m[c] = (m[c] ?? 0) + e.amount;
     }
-    return map;
+    return m;
+  }
+
+  Future<double> _filteredTotalInTripCcy(List<Expense> list) async {
+    final t = _trip;
+    if (t == null || list.isEmpty) return 0.0;
+    final rates = await FxService.loadRates(t.currency);
+    var sum = 0.0;
+    for (final e in list) {
+      sum += FxService.convert(
+        amount: e.amount,
+        from: e.currency.toUpperCase(),
+        to: t.currency.toUpperCase(),
+        ratesForBaseTo: rates,
+      );
+    }
+    return sum;
   }
 
   String _money(String ccy, num v) => '${v.toStringAsFixed(2)} $ccy';
+
+  Future<void> _openFilters() async {
+    final categories = _expenses.map((e) => e.category).toSet().toList()..sort();
+    final currencies = _expenses.map((e) => e.currency.toUpperCase()).toSet().toList()..sort();
+
+    String? selCat = _fCategory;
+    String? selCcy = _fCurrency;
+    DateTimeRange? selRange = _fRange;
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        return Padding(
+          padding: EdgeInsets.only(
+            bottom: MediaQuery.of(ctx).viewInsets.bottom,
+            left: 16,
+            right: 16,
+            top: 16,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Row(
+                children: [
+                  const Text('Filters', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                  const Spacer(),
+                  TextButton(
+                    onPressed: () {
+                      selCat = null;
+                      selCcy = null;
+                      selRange = null;
+                      Navigator.pop(ctx);
+                      setState(() {
+                        _fCategory = null;
+                        _fCurrency = null;
+                        _fRange = null;
+                      });
+                    },
+                    child: const Text('Clear'),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selCat,
+                decoration: const InputDecoration(labelText: 'Category'),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('All')),
+                  ...categories.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+                ],
+                onChanged: (v) => selCat = v,
+              ),
+              const SizedBox(height: 8),
+              DropdownButtonFormField<String>(
+                value: selCcy,
+                decoration: const InputDecoration(labelText: 'Currency'),
+                items: [
+                  const DropdownMenuItem(value: null, child: Text('All')),
+                  ...currencies.map((c) => DropdownMenuItem(value: c, child: Text(c))),
+                ],
+                onChanged: (v) => selCcy = v,
+              ),
+              const SizedBox(height: 8),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.date_range),
+                      label: Text(
+                        selRange == null
+                            ? 'Date range'
+                            : '${selRange!.start.toString().split(' ').first} → ${selRange!.end.toString().split(' ').first}',
+                      ),
+                      onPressed: () async {
+                        final now = DateTime.now();
+                        final picked = await showDateRangePicker(
+                          context: ctx,
+                          firstDate: DateTime(now.year - 5),
+                          lastDate: DateTime(now.year + 5),
+                          initialDateRange: selRange,
+                        );
+                        if (picked != null) {
+                          selRange = DateTimeRange(
+                            start: DateTime(picked.start.year, picked.start.month, picked.start.day),
+                            end: DateTime(picked.end.year, picked.end.month, picked.end.day),
+                          );
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              FilledButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  setState(() {
+                    _fCategory = selCat;
+                    _fCurrency = selCcy;
+                    _fRange = selRange;
+                  });
+                },
+                child: const Text('Apply'),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   @override
   void initState() {
@@ -86,53 +217,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     return list;
   }
 
-  Future<void> _pickCategory(List<Expense> source) async {
-    final cats = <String>{for (final e in source) e.category}.toList()..sort();
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          children: [
-            const ListTile(title: Text('All categories')),
-            ...cats.map((c) => ListTile(
-                  title: Text(c),
-                  onTap: () => Navigator.pop(ctx, c),
-                )),
-          ],
-        ),
-      ),
-    );
-    if (!mounted) return;
-    setState(() => _filterCategory = picked);
-  }
-
-  Future<void> _pickCurrency(List<Expense> source) async {
-    final ccys = <String>{for (final e in source) e.currency.toUpperCase()}.toList()..sort();
-    final picked = await showModalBottomSheet<String>(
-      context: context,
-      builder: (ctx) => SafeArea(
-        child: ListView(
-          children: [
-            const ListTile(title: Text('All currencies')),
-            ...ccys.map((c) => ListTile(
-                  title: Text(c),
-                  onTap: () => Navigator.pop(ctx, c),
-                )),
-          ],
-        ),
-      ),
-    );
-    if (!mounted) return;
-    setState(() => _filterCurrency = picked);
-  }
-
-  Future<void> _pickDateRange() async {
-    final now = DateTime.now();
-    final init = _filterRange ?? DateTimeRange(start: DateTime(now.year, now.month, 1), end: DateTime(now.year, now.month + 1, 0));
-    final r = await showDateRangePicker(context: context, firstDate: DateTime(2000), lastDate: DateTime(2100), initialDateRange: init);
-    if (r == null) return;
-    setState(() => _filterRange = r);
-  }
 
   String _csvEscape(String s) {
     final needs = s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r');
@@ -246,7 +330,20 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         currency: currency,
         receiptPath: e.receiptPath,
       );
-      await widget.api.updateExpense(updated);
+      try {
+        await widget.api.updateExpense(updated);
+      } catch (_) {
+        await OutboxService.enqueue(OutboxOp(
+          method: 'PUT',
+          path: '/expenses/${e.id}',
+          jsonBody: jsonEncode(updated.toJson()),
+        ));
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Saved offline — will sync automatically')),
+          );
+        }
+      }
     }
   }
 
@@ -256,6 +353,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
       appBar: AppBar(
         title: const Text('Expenses'),
         actions: [
+          IconButton(
+            tooltip: 'Filters',
+            icon: const Icon(Icons.filter_list),
+            onPressed: _openFilters,
+          ),
           IconButton(
             tooltip: 'Export CSV',
             icon: const Icon(Icons.ios_share_outlined),
@@ -303,165 +405,122 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             );
           }
           final expenses = snap.data ?? <Expense>[];
+          _expenses = expenses;
           final filtered = _applyFilters(expenses);
+          final perCcy = _sumPerCurrency(filtered);
 
-          final sums = _sumByCurrency(filtered);
-          final trip = _trip;
-
-          return Column(
-            children: [
-              // Filters row
-              Padding(
-                padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
-                child: Wrap(
+          return RefreshIndicator(
+            onRefresh: _refresh,
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+              if (_fCategory != null || _fCurrency != null || _fRange != null) ...[
+                Wrap(
                   spacing: 8,
                   runSpacing: 8,
                   children: [
-                    FilterChip(
-                      label: Text(_filterCategory ?? 'All categories'),
-                      selected: _filterCategory != null,
-                      onSelected: (_) => _pickCategory(expenses),
+                    if (_fCategory != null) Chip(label: Text('Cat: $_fCategory')),
+                    if (_fCurrency != null) Chip(label: Text('Ccy: $_fCurrency')),
+                    if (_fRange != null)
+                      Chip(label: Text('${_fRange!.start.toString().split(" ").first} → ${_fRange!.end.toString().split(" ").first}')),
+                    ActionChip(
+                      avatar: const Icon(Icons.clear, size: 16),
+                      label: const Text('Clear'),
+                      onPressed: () => setState(() { _fCategory = null; _fCurrency = null; _fRange = null; }),
                     ),
-                    FilterChip(
-                      label: Text(_filterCurrency ?? 'All currencies'),
-                      selected: _filterCurrency != null,
-                      onSelected: (_) => _pickCurrency(expenses),
-                    ),
-                    FilterChip(
-                      label: Text(_filterRange == null
-                          ? 'All dates'
-                          : '${_filterRange!.start.year}-${_filterRange!.start.month.toString().padLeft(2, '0')}-${_filterRange!.start.day.toString().padLeft(2, '0')}'
-                            ' → '
-                            '${_filterRange!.end.year}-${_filterRange!.end.month.toString().padLeft(2, '0')}-${_filterRange!.end.day.toString().padLeft(2, '0')}'),
-                      selected: _filterRange != null,
-                      onSelected: (_) => _pickDateRange(),
-                    ),
-                    if (_filterCategory != null || _filterCurrency != null || _filterRange != null)
-                      TextButton.icon(
-                        onPressed: () => setState(() {
-                          _filterCategory = null;
-                          _filterCurrency = null;
-                          _filterRange = null;
-                        }),
-                        icon: const Icon(Icons.clear),
-                        label: const Text('Clear'),
-                      ),
                   ],
                 ),
-              ),
+                const SizedBox(height: 12),
+              ],
 
-              // Quick totals card
-              if (filtered.isNotEmpty)
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-                  child: Card(
+              FutureBuilder<double>(
+                future: _filteredTotalInTripCcy(filtered),
+                builder: (_, total) {
+                  final t = _trip;
+                  final lines = <Widget>[
+                    Text('Filtered totals', style: Theme.of(context).textTheme.titleMedium),
+                    const SizedBox(height: 6),
+                    ...perCcy.entries.map((e) => Text('${e.value.toStringAsFixed(2)} ${e.key}')),
+                  ];
+                  if (t != null && total.hasData) {
+                    lines.add(const SizedBox(height: 6));
+                    lines.add(Text('≈ ${total.data!.toStringAsFixed(2)} ${t.currency}',
+                        style: Theme.of(context).textTheme.bodyMedium));
+                  }
+                  return Card(
                     child: Padding(
                       padding: const EdgeInsets.all(12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('Filtered totals', style: Theme.of(context).textTheme.titleMedium),
-                          const SizedBox(height: 6),
-                          ...sums.entries.map((e) {
-                            final c = e.key;
-                            final v = e.value;
-                            if (trip != null && c.toUpperCase() != trip.currency.toUpperCase()) {
-                              return FutureBuilder<double>(
-                                future: widget.api.convert(amount: v, from: c, to: trip.currency),
-                                builder: (_, fx) => Text(
-                                  fx.hasData
-                                      ? '${_money(c, v)}  (≈ ${_money(trip.currency, fx.data!)})'
-                                      : _money(c, v),
-                                ),
-                              );
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: lines),
+                    ),
+                  );
+                },
+              ),
+              const SizedBox(height: 12),
+
+              if (filtered.isEmpty)
+                const Center(child: Padding(
+                  padding: EdgeInsets.all(24), child: Text('No expenses match filters'),
+                ))
+              else
+                ...filtered.map((e) => ListTile(
+                  leading: (e.receiptPath != null && e.receiptPath!.isNotEmpty)
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.file(
+                            File(e.receiptPath!),
+                            width: 44,
+                            height: 44,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : const Icon(Icons.receipt_long_outlined),
+                  title: Text(e.title),
+                  subtitle: Text('${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}'),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(_money(e.currency, e.amount)),
+                      PopupMenuButton<String>(
+                        onSelected: (v) async {
+                          if (v == 'edit') {
+                            await _editExpenseDialog(e);
+                            await _refresh();
+                          } else if (v == 'delete') {
+                            try {
+                              await widget.api.deleteExpense(e.id);
+                            } catch (_) {
+                              await OutboxService.enqueue(OutboxOp(
+                                method: 'DELETE',
+                                path: '/expenses/${e.id}',
+                              ));
+                              if (mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  const SnackBar(content: Text('Queued deletion — will sync when online')),
+                                );
+                              }
                             }
-                            return Text(_money(c, v));
-                          }),
-                          const SizedBox(height: 4),
-                          if (trip != null)
-                            FutureBuilder<double>(
-                              future: () async {
-                                double total = 0;
-                                for (final e in sums.entries) {
-                                  final vv = await widget.api.convert(amount: e.value, from: e.key, to: trip.currency);
-                                  total += vv;
-                                }
-                                return total;
-                              }(),
-                              builder: (_, tot) => Text(
-                                'Total (≈ ${trip.currency}): ${tot.hasData ? tot.data!.toStringAsFixed(2) : '…'}',
-                                style: Theme.of(context).textTheme.bodySmall,
-                              ),
-                            ),
+                            await _refresh();
+                          }
+                        },
+                        itemBuilder: (_) => const [
+                          PopupMenuItem(value: 'edit', child: Text('Edit')),
+                          PopupMenuItem(value: 'delete', child: Text('Delete')),
                         ],
                       ),
-                    ),
+                    ],
                   ),
-                ),
-
-              // List
-              Expanded(
-                child: RefreshIndicator(
-                  onRefresh: _refresh,
-                  child: filtered.isEmpty
-                      ? ListView(children: const [
-                          SizedBox(height: 80),
-                          Center(child: Text('No expenses match the filters')),
-                        ])
-                      : ListView.separated(
-                          itemCount: filtered.length,
-                          separatorBuilder: (_, __) => const Divider(height: 1),
-                          itemBuilder: (_, i) {
-                            final e = filtered[i];
-                            return ListTile(
-                              leading: (e.receiptPath != null && e.receiptPath!.isNotEmpty)
-                                  ? ClipRRect(
-                                      borderRadius: BorderRadius.circular(6),
-                                      child: Image.file(
-                                        File(e.receiptPath!),
-                                        width: 44,
-                                        height: 44,
-                                        fit: BoxFit.cover,
-                                      ),
-                                    )
-                                  : const Icon(Icons.receipt_long_outlined),
-                              title: Text(e.title),
-                              subtitle: Text('${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}'),
-                              onTap: () {
-                                if (e.receiptPath == null || e.receiptPath!.isEmpty) return;
-                                Navigator.of(context).push(
-                                  MaterialPageRoute(
-                                    builder: (_) => ReceiptViewerScreen(path: e.receiptPath!),
-                                  ),
-                                );
-                              },
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(_money(e.currency, e.amount)),
-                                  PopupMenuButton<String>(
-                                    onSelected: (v) async {
-                                      if (v == 'edit') {
-                                        await _editExpenseDialog(e);
-                                        await _refresh();
-                                      } else if (v == 'delete') {
-                                        await widget.api.deleteExpense(e.id);
-                                        await _refresh();
-                                      }
-                                    },
-                                    itemBuilder: (_) => const [
-                                      PopupMenuItem(value: 'edit', child: Text('Edit')),
-                                      PopupMenuItem(value: 'delete', child: Text('Delete')),
-                                    ],
-                                  ),
-                                ],
-                              ),
-                            );
-                          },
-                        ),
-                ),
-              ),
+                  onTap: () {
+                    if (e.receiptPath == null || e.receiptPath!.isEmpty) return;
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ReceiptViewerScreen(path: e.receiptPath!),
+                      ),
+                    );
+                  },
+                )),
+              const SizedBox(height: 80),
             ],
+          ),
           );
         },
       ),
