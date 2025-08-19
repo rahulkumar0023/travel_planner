@@ -412,7 +412,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Dashboard • ${t.name}'),
+        // AppBar two-line title start
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              _activeTrip!.name,
+              style: Theme.of(context).textTheme.titleMedium,
+              overflow: TextOverflow.ellipsis,
+            ),
+            Text(
+              'Dashboard',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
+        ),
+        // AppBar two-line title end
         actions: [
           IconButton(
             onPressed: _openTripPicker,
@@ -496,6 +511,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Trip name header start
+                        Text(
+                          _activeTrip!.name,
+                          style: Theme.of(context).textTheme.titleLarge,
+                        ),
+                        const SizedBox(height: 6),
+                        // Trip name header end
+
                         // --- compute numbers (trip currency) ---
                         // 👇 NEW: always use the FX-correct total we recalc into _spentInTripCcy
                         Text(
