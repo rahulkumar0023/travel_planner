@@ -4,6 +4,7 @@ import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
 import '../services/budgets_sync.dart';
+import '../services/archived_trips_store.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -22,6 +23,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   final Set<String> _spentLoadedFor = <String>{};   // (already present)
   Set<String> _knownTripIds = <String>{};           // NEW
   bool _loadingSpends = false;                      // (already present)
+  Set<String> _archivedTrips = <String>{};
+  bool _showArchived = false;
 // Budgets knownTripIds fields end
 
 
@@ -46,6 +49,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       trips = await widget.api.fetchTripsOrCache();  // requires LocalTripStore; else use fetchTrips()
     } catch (_) {}
     _knownTripIds = trips.map((t) => t.id).toSet();
+    _archivedTrips = await ArchivedTripsStore.all();
 
     // 2) reload budgets
     setState(() {
@@ -68,6 +72,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       _knownTripIds
         ..clear()
         ..addAll(trips.map((t) => t.id));
+      final archived = await ArchivedTripsStore.all();
+      _archivedTrips = archived;
       if (mounted) setState(() {}); // let the filter re-run
     } catch (_) {
       // ignore; if trips can't be loaded, we just won't filter by ids yet
@@ -550,6 +556,15 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       appBar: AppBar(
         title: const Text('Budgets'),
         actions: [
+          IconButton(
+            tooltip: _showArchived ? 'Hide archived' : 'Show archived',
+            icon: Icon(_showArchived ? Icons.inbox_outlined : Icons.inbox_rounded),
+            onPressed: () async {
+              setState(() => _showArchived = !_showArchived);
+              _archivedTrips = await ArchivedTripsStore.all();
+              setState(() {}); // re-filter
+            },
+          ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
           const SizedBox(width: 4),
         ],
@@ -567,9 +582,11 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
           // Budgets filter orphan start
 // Keep all monthly budgets, but only keep trip budgets if we know their trip still exists
           final filtered = all.where((b) {
-            if (b.kind != BudgetKind.trip) return true;     // keep monthly
-            if (b.tripId == null) return false;             // malformed, hide
-            return _knownTripIds.contains(b.tripId!);       // only show if the trip still exists
+            if (b.kind != BudgetKind.trip) return true;      // keep monthly
+            if (b.tripId == null) return false;              // malformed, hide
+            if (!_knownTripIds.contains(b.tripId!)) return false;
+            if (!_showArchived && _archivedTrips.contains(b.tripId!)) return false; // hide archived trips
+            return true;
           }).toList();
 
 // From here on, use 'filtered' instead of 'all'

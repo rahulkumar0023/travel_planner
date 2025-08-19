@@ -15,6 +15,7 @@ import '../services/trip_storage_service.dart';
 import '../services/local_trip_store.dart'; // <-- keep
 import '../services/participants_service.dart';
 import '../services/fx_service.dart';
+import '../services/archived_trips_store.dart';
 
 import 'expense_form_screen.dart';
 import 'group_balance_screen.dart';
@@ -46,8 +47,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-
-
   double _spentInTripCcy = 0.0;
   bool _recalcInFlight = false; // just to avoid overlapping recalcs
 
@@ -58,6 +57,14 @@ class _DashboardScreenState extends State<DashboardScreen> {
   double? _approxHomeValue;
 
   double? _tripBudgetOverride; // filled if we detect a matching Trip budget
+
+  // Insights state
+  Map<String, double> _byCategoryTripCcy = {}; // category -> amount (trip currency)
+  double _spentTripCcy = 0;                    // total spent (trip currency)
+  double? _dailyBurn;                          // trip currency / day
+  int? _daysLeft;                              // calendar days left in trip (>=0)
+
+  bool _isArchivedTrip = false;
 
   // --- linked monthly info for the active trip budget ---
   Budget? _tripBudgetObj;          // the trip's Budget row (kind=trip)
@@ -87,7 +94,22 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _boot() async {
     await _ensureActiveTrip();
     await _loadLocal();            // will recalc + then update home (see patch below)
+    await _recalcInsights();
     await _loadTripBudgetOverride();
+  }
+
+  @override
+  void didUpdateWidget(covariant DashboardScreen oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _recalcInsights();
+    final id = _activeTrip?.id;
+    if (id != null) {
+      ArchivedTripsStore.isArchived(id).then((v) {
+        if (mounted) setState(() => _isArchivedTrip = v);
+      });
+    } else {
+      if (mounted) setState(() => _isArchivedTrip = false);
+    }
   }
 
 
@@ -98,7 +120,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _ensureActiveTrip() async {
     _activeTrip = TripStorageService.loadLightweight();
     if (_activeTrip == null) {
-      if (mounted) setState(() {}); // triggers empty-state
+      if (mounted) setState(() => _isArchivedTrip = false); // triggers empty-state
       return;
     }
     // Optional: verify it still exists in cache so deleted trips don't show
@@ -108,9 +130,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
       if (!exists) {
         await TripStorageService.clear();
         _activeTrip = null;
-        if (mounted) setState(() {});
+        if (mounted) setState(() => _isArchivedTrip = false);
+        return;
       }
     } catch (_) {}
+    _isArchivedTrip = await ArchivedTripsStore.isArchived(_activeTrip!.id);
+    if (mounted) setState(() {});
   }
 // _ensureActiveTrip method end
 
@@ -156,7 +181,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
     if (picked != null) {
       await TripStorageService.save(picked);
-      setState(() => _activeTrip = picked);
+      final arch = await ArchivedTripsStore.isArchived(picked.id);
+      if (!mounted) return;
+      setState(() {
+        _activeTrip = picked;
+        _isArchivedTrip = arch;
+      });
       await _syncActiveTripExpenses();
       await _loadTripBudgetOverride();
       await _updateApproxHome();
@@ -207,6 +237,68 @@ class _DashboardScreenState extends State<DashboardScreen> {
   }
 // --- recalc spent in trip currency end ---
 
+  Future<void> _recalcInsights() async {
+    final t = _activeTrip;
+    if (t == null) {
+      if (mounted) setState(() {
+        _byCategoryTripCcy = {};
+        _spentTripCcy = 0;
+        _dailyBurn = null;
+        _daysLeft = null;
+      });
+      return;
+    }
+
+    try {
+      // One FX table for the trip currency
+      final rates = await FxService.loadRates(t.currency);
+
+      // Sum by category in trip currency
+      final map = <String, double>{};
+      double total = 0.0;
+      for (final e in _expenses) {
+        final from = (e.currency.isEmpty) ? t.currency : e.currency;
+        final v = FxService.convert(
+          amount: e.amount,
+          from: from,
+          to: t.currency,
+          ratesForBaseTo: rates,
+        );
+        total += v;
+        map[e.category] = (map[e.category] ?? 0) + v;
+      }
+
+      // Daily burn / days left
+      final now = DateTime.now();
+      final start = DateTime(t.startDate.year, t.startDate.month, t.startDate.day);
+      final end   = DateTime(t.endDate.year,   t.endDate.month,   t.endDate.day);
+      final daysElapsed = (now.isBefore(start))
+          ? 0
+          : now.difference(start).inDays + 1; // count today
+      final daysRemaining = (now.isAfter(end))
+          ? 0
+          : (end.difference(DateTime(now.year, now.month, now.day)).inDays + 1);
+
+      final burn = daysElapsed > 0 ? (total / daysElapsed) : null;
+
+      if (!mounted) return;
+      setState(() {
+        _byCategoryTripCcy = map;
+        _spentTripCcy = total;
+        _dailyBurn = burn;
+        _daysLeft = daysRemaining;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _byCategoryTripCcy = {};
+        _spentTripCcy = _expenses.fold<double>(0, (p, e) => p + e.amount); // fallback (naïve)
+        _dailyBurn = null;
+        _daysLeft = null;
+      });
+    }
+  }
+
 
 
 
@@ -226,6 +318,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
     await _recalcSpentInTripCurrency();
     await _updateApproxHome();
+    await _recalcInsights();
   }
 // _loadLocal method end
 
@@ -566,6 +659,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             setState(() => _expenses.insert(0, e));
             await _recalcSpentInTripCurrency();
             await _updateApproxHome();
+            await _recalcInsights();
 
             // 2) ALSO sync to server so Budgets can see it
             try {
@@ -692,12 +786,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _addExpenseForm, // or _addExpenseQuick for quick test
+        onPressed: _isArchivedTrip ? null : _addExpenseForm, // or _addExpenseQuick for quick test
         child: const Icon(Icons.add),
       ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (_isArchivedTrip)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 12),
+              child: Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceVariant,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.archive_outlined, size: 16),
+                    SizedBox(width: 8),
+                    Text('This trip is archived'),
+                  ],
+                ),
+              ),
+            ),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -868,6 +981,44 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
           ),
           const SizedBox(height: 12),
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Insights', style: Theme.of(context).textTheme.titleMedium),
+                  const SizedBox(height: 8),
+                  // Row: daily burn & days left
+                  Wrap(
+                    spacing: 16,
+                    runSpacing: 4,
+                    children: [
+                      Text('Daily burn: ${_dailyBurn == null ? '—' : _dailyBurn!.toStringAsFixed(2)} ${_activeTrip!.currency}/day'),
+                      Text('Days left: ${_daysLeft == null ? '—' : _daysLeft}'),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  if (_byCategoryTripCcy.isEmpty)
+                    const Text('No spending yet.')
+                  else ...[
+                    Text('By category', style: Theme.of(context).textTheme.bodyMedium),
+                    const SizedBox(height: 8),
+                    _CategoryBars(
+                      data: _byCategoryTripCcy,
+                      currency: _activeTrip!.currency,
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Total (≈ ${_activeTrip!.currency}): ${_spentTripCcy.toStringAsFixed(2)}',
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
           Text('Recent expenses',
               style: Theme.of(context).textTheme.titleMedium),
           const SizedBox(height: 8),
@@ -904,6 +1055,66 @@ class _DashboardScreenState extends State<DashboardScreen> {
             ),
         ],
       ),
+    );
+  } 
+}
+
+class _CategoryBars extends StatelessWidget {
+  const _CategoryBars({required this.data, required this.currency});
+  final Map<String, double> data;
+  final String currency;
+
+  @override
+  Widget build(BuildContext context) {
+    final entries = data.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+    final maxV = entries.first.value;
+
+    return Column(
+      children: entries.map((e) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 4),
+          child: Row(
+            children: [
+              Expanded(
+                flex: 2,
+                child: Text(e.key, overflow: TextOverflow.ellipsis),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                flex: 5,
+                child: LayoutBuilder(
+                  builder: (_, c) {
+                    final w = (e.value / (maxV == 0 ? 1 : maxV)) * c.maxWidth;
+                    return Stack(
+                      children: [
+                        Container(
+                          height: 10,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.surfaceVariant,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                        Container(
+                          height: 10,
+                          width: w,
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primary.withOpacity(0.9),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(width: 8),
+              Text('${e.value.toStringAsFixed(2)} $currency',
+                  style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        );
+      }).toList(),
     );
   }
 }
