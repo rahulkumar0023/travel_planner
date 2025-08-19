@@ -3,7 +3,6 @@ import '../models/trip.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
-import '../services/fx_service.dart';
 import '../services/budgets_sync.dart';
 
 class BudgetsScreen extends StatefulWidget {
@@ -55,7 +54,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     final budgets = await _future;
 
     // 3) recalc spends for visible budgets
-    await _recalcSpends(budgets);
+    await _recalcSpends(budgets, force: true);
 
     if (!mounted) return;
     setState(() { _loadingSpends = false; });
@@ -478,74 +477,50 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 // Schedule a recalc after the current frame (so we don't setState during build)
   void _scheduleSpendRecalc(List<Budget> all) {
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _recalcSpends(all);
+      _recalcSpends(all, force: false);
     });
   }
 
-// _recalcSpends with FX start
-// Recalculate spends for any trip budgets whose tripId we haven't loaded yet
-  Future<void> _recalcSpends(List<Budget> all) async {
-    // collect new tripIds to load
-    final ids = <String>[];
-    for (final b in all) {
-      if (b.kind == BudgetKind.trip &&
-          b.tripId != null &&
-          !_spentLoadedFor.contains(b.tripId)) {
-        ids.add(b.tripId!);
+// Recalculate trip spends in each Trip Budget's currency (uses ApiService convert cache)
+  Future<void> _recalcSpends(List<Budget> budgets, {bool force = false}) async {
+    final tripBudgets = budgets.where((b) => b.kind == BudgetKind.trip && b.tripId != null).toList();
+    if (tripBudgets.isEmpty) return;
+
+    // Force a fresh pass when requested (e.g., after refresh or restart)
+    if (force) {
+      for (final b in tripBudgets) {
+        _spentLoadedFor.remove(b.tripId);
       }
     }
-    if (ids.isEmpty) return;
 
     setState(() => _loadingSpends = true);
-
     try {
-      await Future.wait(ids.map((id) async {
-        // 1) find the trip budget for this tripId so we know the budget currency
-        Budget? tripBudget;
-        for (final cand in all) {
-          if (cand.kind == BudgetKind.trip && cand.tripId == id) {
-            tripBudget = cand;
-            break;
-          }
-        }
-        if (tripBudget == null) {
-          // nothing to sum into (shouldn't happen), mark as loaded w/ zero
-          _spentByTrip[id] = 0.0;
-          _spentLoadedFor.add(id);
-          return;
-        }
+      for (final b in tripBudgets) {
+        final tripId = b.tripId!;
+        if (!force && _spentLoadedFor.contains(tripId)) continue;
 
-        // 2) fetch expenses for this trip
-        final expenses = await widget.api.fetchExpenses(id);
+        final expenses = await widget.api.fetchExpenses(tripId);
 
-        // 3) load FX table for the target (budget) currency
-        final rates = await FxService.loadRates(tripBudget.currency);
-
-        // 4) sum after converting each expense amount to the budget currency
         double sum = 0.0;
         for (final e in expenses) {
-          final fromCcy = (e.currency == null || e.currency.isEmpty)
-              ? tripBudget.currency
-              : e.currency; // fallback for legacy rows
-          sum += FxService.convert(
+          final from = (e.currency.isEmpty) ? b.currency : e.currency;
+          final v = await widget.api.convert(
             amount: e.amount,
-            from: fromCcy,
-            to: tripBudget.currency,
-            ratesForBaseTo: rates,
+            from: from.toUpperCase(),
+            to: b.currency.toUpperCase(),
           );
+          sum += v;
         }
 
-        _spentByTrip[id] = sum;
-        _spentLoadedFor.add(id);
-      }));
+        _spentByTrip[tripId] = sum;
+        _spentLoadedFor.add(tripId);
+      }
     } catch (_) {
-      // ignore; UI will just show 0 spent if something fails
+      // ignore; UI will show zeros if anything fails
     }
-
     if (!mounted) return;
     setState(() => _loadingSpends = false);
   }
-// _recalcSpends with FX end
 
 
 
@@ -569,32 +544,6 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     }
   }
 
-  // Convert the spend of all trips linked to `monthly` into `monthly.currency`
-  Future<double> _monthlySpentConverted(
-      Budget monthly, List<Budget> allTripBudgets) async {
-    // one FX table for the monthly currency
-    final rates = await FxService.loadRates(monthly.currency);
-
-    double sum = 0.0;
-    for (final tb in allTripBudgets) {
-      if (tb.kind != BudgetKind.trip) continue;
-      if (tb.linkedMonthlyBudgetId != monthly.id) continue;
-
-      // _spentByTrip[...] holds the trip's total in *that trip budget's currency*
-      final tripSpend = _spentByTrip[tb.tripId ?? ''] ?? 0.0;
-
-      // convert each trip's spend into the monthly currency
-      sum += FxService.convert(
-        amount: tripSpend,
-        from: tb.currency,
-        to: monthly.currency,
-        ratesForBaseTo: rates,
-      );
-    }
-    return sum;
-  }
-
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -615,7 +564,6 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
             return Center(child: Text('Failed to load budgets:\n${snap.error}'));
           }
           final all = snap.data ?? const <Budget>[];
-          _scheduleSpendRecalc(all); // budgets = the full list you’re displaying
           // Budgets filter orphan start
 // Keep all monthly budgets, but only keep trip budgets if we know their trip still exists
           final filtered = all.where((b) {
@@ -628,6 +576,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
           final monthly = filtered.where((b) => b.kind == BudgetKind.monthly).toList();
           final trips   = filtered.where((b) => b.kind == BudgetKind.trip).toList();
 // Budgets filter orphan end
+
+          _scheduleSpendRecalc(filtered); // budgets = the full list you’re displaying
 
           final usingCache = widget.api.lastBudgetsFromCache;
 
@@ -659,9 +609,25 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                             : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
                       ),
                       subtitle: FutureBuilder<double>(
-                        future: _monthlySpentConverted(m, trips),
-                        builder: (ctx, snap) {
-                          final spent = snap.data ?? 0.0;
+                        future: () async {
+                          double s = 0.0;
+                          final linkedTrips = trips.where((tb) => tb.linkedMonthlyBudgetId == m.id);
+                          for (final tb in linkedTrips) {
+                            final tripSpentInTripCcy = _spentByTrip[tb.tripId ?? ''] ?? 0.0;
+                            if (tripSpentInTripCcy == 0) continue;
+
+                            // convert each trip's spent → monthly currency
+                            final add = await widget.api.convert(
+                              amount: tripSpentInTripCcy,
+                              from: tb.currency.toUpperCase(),
+                              to: m.currency.toUpperCase(),
+                            );
+                            s += add;
+                          }
+                          return s;
+                        }(),
+                        builder: (_, snap) {
+                          final spent = (snap.data ?? 0.0);
                           final remaining = (m.amount) - spent;
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
