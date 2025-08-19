@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 import '../models/trip.dart';
 import 'dart:math';
-import '../services/budgets_sync.dart';
 import '../services/local_trip_store.dart';
 import '../services/trip_storage_service.dart';
 import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
@@ -36,6 +35,46 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
     await _future; // no setState AFTER this await
   }
 // _refresh method end
+
+// 👇 NEW: ensure a Trip Budget exists for a created Trip (duplicate-guard)
+// _ensureTripBudgetForTrip method start
+Future<void> _ensureTripBudgetForTrip({
+  required Trip trip,
+}) async {
+  try {
+    // 1) See if a Trip budget already exists for this tripId
+    final budgets = await widget.api.fetchBudgetsOrCache();
+    final already = budgets.any((b) =>
+        b.kind == BudgetKind.trip && b.tripId == trip.id);
+
+    if (!already) {
+      // 2) Create one (amount = trip.initialBudget; currency = trip.currency)
+      await widget.api.createBudget(
+        kind: BudgetKind.trip,
+        currency: trip.currency,
+        amount: trip.initialBudget,
+        tripId: trip.id,
+        name: trip.name,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Trip budget created')),
+        );
+      }
+    }
+
+    // 3) Fire-and-forget: refresh budgets cache so Budgets tab shows the new row
+    // ignore: unawaited_futures
+    widget.api.fetchBudgetsOrCache();
+  } catch (e) {
+    if (!mounted) return;
+    // Trip stays created even if budget fails — just inform the user
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('Could not create trip budget: $e')),
+    );
+  }
+}
+// _ensureTripBudgetForTrip method end
 
   Future<void> _createTripDialog() async {
     final nameCtrl = TextEditingController();
@@ -118,38 +157,16 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
     if (created != null) {
       final saved = await widget.api.createTrip(created);
 
-      // NEW: create a Trip Budget tied to this trip so it appears in Budgets
-      try {
-        if (saved.initialBudget > 0) {
-          await widget.api.createBudget(
-            kind: BudgetKind.trip,
-            currency: saved.currency,
-            amount: saved.initialBudget,
-            tripId: saved.id,
-            name: saved.name,
-          );
-        }
-        // 👇 NEW: tell Home/Budgets to refresh their view
-        BudgetsSync.bump();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Trip budget created')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not create trip budget: $e')),
-          );
-        }
-      }
+      // 👇 NEW: auto-create the Trip Budget for this Trip
+      // auto-create trip budget call start
+      await _ensureTripBudgetForTrip(trip: saved);
+      // auto-create trip budget call end
 
       await TripStorageService.save(saved);
       if (mounted) {
         setState(() {
           _future = widget.api.fetchTripsOrCache(); // refresh list after creation
         });
-        // If you want to stay on this screen, keep this. If you want to jump back, leave as-is.
         Navigator.of(context).pop<Trip>(saved);
       }
     }
