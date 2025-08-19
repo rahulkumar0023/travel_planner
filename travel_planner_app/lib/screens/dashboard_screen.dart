@@ -528,6 +528,16 @@ class _DashboardScreenState extends State<DashboardScreen> {
             setState(() => _expenses.insert(0, e));
             await _recalcSpentInTripCurrency();
             await _updateApproxHome();
+
+            // 2) ALSO sync to server so Budgets can see it
+            try {
+              await widget.api.addExpense(e);
+            } catch (err) {
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(content: Text('Saved locally. Server sync failed: $err')),
+              );
+              }
           },
         ),
       ),
