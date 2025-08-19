@@ -50,7 +50,6 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
   double _spentInTripCcy = 0.0;
-  bool _recalcInFlight = false; // just to avoid overlapping recalcs
 
   Trip? _activeTrip;
   late final Box<Expense> _box;
@@ -193,67 +192,24 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       });
       await _syncActiveTripExpenses();
       await _loadTripBudgetOverride();
-      await _updateApproxHome();
     }
   }
 // _openTripPicker method (final) end
-
-// --- recalc spent in trip currency start ---
-  Future<void> _recalcSpentInTripCurrency() async {
-    final t = _activeTrip;
-    if (t == null) {
-      if (mounted) setState(() => _spentInTripCcy = 0.0);
-      return;
-    }
-    if (_recalcInFlight) return;
-    _recalcInFlight = true;
-
-    try {
-      // 1) group all expenses by their own currency
-      final buckets = _bucketsByCurrency(); // e.g. { 'PLN': 50.0, 'INR': 300.0, ... }
-
-      // 2) convert each bucket to the TRIP currency using the backend converter
-      double total = 0.0;
-      for (final entry in buckets.entries) {
-        final from = entry.key.toUpperCase();
-        final amt  = entry.value;
-        if (amt == 0) continue;
-
-        final converted = (from == t.currency.toUpperCase())
-            ? amt
-            : await widget.api.convert(amount: amt, from: from, to: t.currency);
-
-        total += converted;
-      }
-
-      if (!mounted) return;
-      setState(() => _spentInTripCcy = total);
-
-      // 👇 NEW: keep the “≈ home” line in sync with the fresh total
-      await _updateApproxHome();
-    } catch (e) {
-      // fallback: naive sum so the UI doesn't break
-      final fallback = _expenses.fold<double>(0.0, (p, e) => p + e.amount);
-      if (mounted) setState(() => _spentInTripCcy = fallback);
-    } finally {
-      _recalcInFlight = false;
-    }
-  }
-// --- recalc spent in trip currency end ---
 
   Future<void> _recomputeInsights() async {
     final t = _activeTrip;
     if (t == null) return;
 
-    // 1) group by currency (raw)
+    // 1) Raw by-currency buckets (for the “Spent currencies” list)
     final byCcy = <String, double>{};
     for (final e in _expenses) {
       final c = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
       byCcy[c] = (byCcy[c] ?? 0) + e.amount;
     }
 
-    // 2) convert every expense to trip currency (one FX table)
+    // 2) ONE FX table for the trip currency; convert everything once
     final rates = await FxService.loadRates(t.currency);
+
     double sumBase = 0.0;
     final byCatBase = <String, double>{};
     for (final e in _expenses) {
@@ -270,7 +226,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
 
     // 3) daily burn & days left
-    final daysSoFar = (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
+    final daysSoFar =
+        (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
     final burn = sumBase / daysSoFar;
     int? daysLeft;
     final budget = (_tripBudgetOverride ?? t.initialBudget);
@@ -284,9 +241,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       _byCcy = byCcy;
       _byCategoryBase = byCatBase;
       _spentInBase = sumBase;
+
+      // 👇 keep the card’s “Spent” in lockstep with Insights
+      _spentInTripCcy = sumBase;
+
       _dailyBurn = burn;
       _daysLeft = daysLeft;
     });
+
+    // keep the “≈ home” line fresh
+    await _updateApproxHome();
   }
 
 
@@ -306,8 +270,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     });
 
 
-    await _recalcSpentInTripCurrency();
-    await _updateApproxHome();
     await _recomputeInsights();
   }
 // _loadLocal method end
@@ -353,7 +315,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
       // 3) refresh UI + totals
       await _loadLocal();
-      await _recalcSpentInTripCurrency();
       if (!silent && mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(const SnackBar(content: Text('Expenses synced')));
@@ -647,9 +608,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             );
             await _box.add(e); // local first (Hive)
             setState(() => _expenses.insert(0, e));
-            await _recalcSpentInTripCurrency();
             await _recomputeInsights();
-            await _updateApproxHome();
 
             // 2) ALSO sync to server so Budgets can see it
             try {
@@ -923,8 +882,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                               );
                               if (!mounted) return;
                               await _loadTripBudgetOverride(); // refresh after returning
-                              await _recalcSpentInTripCurrency(); // 👈 NEW
-                              await _updateApproxHome();          // 👈 NEW
+                              await _recomputeInsights();
                             },
                           ),
                         ],
