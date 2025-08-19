@@ -569,31 +569,29 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     }
   }
 
-  Future<double> _sumLinkedSpentInMonthly({
-    required Budget monthlyBudget,
-    required List<Budget> allTrips,
-  }) async {
-    final linkedTrips =
-        allTrips.where((tb) => tb.linkedMonthlyBudgetId == monthlyBudget.id).toList();
-    if (linkedTrips.isEmpty) return 0.0;
+  // Convert the spend of all trips linked to `monthly` into `monthly.currency`
+  Future<double> _monthlySpentConverted(
+      Budget monthly, List<Budget> allTripBudgets) async {
+    // one FX table for the monthly currency
+    final rates = await FxService.loadRates(monthly.currency);
 
-    try {
-      final rates = await FxService.loadRates(monthlyBudget.currency);
-      double sum = 0.0;
-      for (final tb in linkedTrips) {
-        final spentInTripCcy = _spentByTrip[tb.tripId ?? ''] ?? 0.0;
-        sum += FxService.convert(
-          amount: spentInTripCcy,
-          from: tb.currency,
-          to: monthlyBudget.currency,
-          ratesForBaseTo: rates,
-        );
-      }
-      return sum;
-    } catch (_) {
-      return linkedTrips.fold<double>(
-          0.0, (p, tb) => p + (_spentByTrip[tb.tripId ?? ''] ?? 0.0));
+    double sum = 0.0;
+    for (final tb in allTripBudgets) {
+      if (tb.kind != BudgetKind.trip) continue;
+      if (tb.linkedMonthlyBudgetId != monthly.id) continue;
+
+      // _spentByTrip[...] holds the trip's total in *that trip budget's currency*
+      final tripSpend = _spentByTrip[tb.tripId ?? ''] ?? 0.0;
+
+      // convert each trip's spend into the monthly currency
+      sum += FxService.convert(
+        amount: tripSpend,
+        from: tb.currency,
+        to: monthly.currency,
+        ratesForBaseTo: rates,
+      );
     }
+    return sum;
   }
 
 
@@ -661,9 +659,9 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                             : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
                       ),
                       subtitle: FutureBuilder<double>(
-                        future: _sumLinkedSpentInMonthly(monthlyBudget: m, allTrips: trips),
-                        builder: (ctx, snapSpent) {
-                          final spent = snapSpent.data ?? 0.0;
+                        future: _monthlySpentConverted(m, trips),
+                        builder: (ctx, snap) {
+                          final spent = snap.data ?? 0.0;
                           final remaining = (m.amount) - spent;
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
