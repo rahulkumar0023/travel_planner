@@ -5,6 +5,7 @@ import 'package:hive/hive.dart';
 import '../models/trip.dart';
 import '../models/expense.dart';
 import '../models/budget.dart';
+import '../models/currencies.dart';
 
 import '../services/api_service.dart';
 import '../services/prefs_service.dart';
@@ -350,6 +351,123 @@ class _DashboardScreenState extends State<DashboardScreen> {
     widget.onSwitchTrip();
   }
 
+  Future<void> _manageSpendCurrencies() async {
+    final trip = _activeTrip;
+    if (trip == null) return;
+
+    final base = trip.currency.toUpperCase();
+    final selected = <String>{...((trip.spendCurrencies) ?? const <String>[])}
+        .map((e) => e.toUpperCase())
+        .where((c) => c != base)
+        .toSet();
+
+    final all = [...kCurrencyCodes]..sort();
+
+    await showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) {
+        String? addPick;
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 16, right: 16,
+            top: 16,
+            bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
+          ),
+          child: StatefulBuilder(builder: (ctx, setBtm) {
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Spend currencies', style: Theme.of(ctx).textTheme.titleMedium),
+                const SizedBox(height: 8),
+                Text('Base currency', style: Theme.of(ctx).textTheme.labelMedium),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8, runSpacing: 8,
+                  children: [
+                    Chip(label: Text(base), avatar: const Icon(Icons.star, size: 16)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text('Extra currencies', style: Theme.of(ctx).textTheme.labelMedium),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8, runSpacing: 8,
+                  children: selected.isEmpty
+                      ? [Text('None', style: Theme.of(ctx).textTheme.bodySmall)]
+                      : selected.map((c) => InputChip(
+                          label: Text(c),
+                          onDeleted: () => setBtm(() => selected.remove(c)),
+                        )).toList(),
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: DropdownButtonFormField<String>(
+                        value: addPick,
+                        hint: const Text('Add currency'),
+                        isExpanded: true,
+                        items: all
+                            .where((c) => c != base && !selected.contains(c))
+                            .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                            .toList(),
+                        onChanged: (v) => setBtm(() => addPick = v),
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton.icon(
+                      onPressed: (addPick == null)
+                          ? null
+                          : () => setBtm(() {
+                                selected.add(addPick!);
+                                addPick = null;
+                              }),
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                Row(
+                  children: [
+                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                    const Spacer(),
+                    FilledButton.icon(
+                      icon: const Icon(Icons.save),
+                      label: const Text('Save'),
+                      onPressed: () async {
+                        final updated = Trip(
+                          id: trip.id,
+                          name: trip.name,
+                          startDate: trip.startDate,
+                          endDate: trip.endDate,
+                          initialBudget: trip.initialBudget,
+                          currency: trip.currency,
+                          participants: trip.participants,
+                          spendCurrencies: selected.toList(),
+                        );
+                        await TripStorageService.save(updated);
+                        try { await widget.api.updateTrip(updated); } catch (_) {}
+                        if (!mounted) return;
+                        setState(() => _activeTrip = updated);
+                        Navigator.pop(ctx);
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Spend currencies updated')),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ],
+            );
+          }),
+        );
+      },
+    );
+  }
+
 // 👇 NEW: budgets change handler
 // _onBudgetsChanged method start
   void _onBudgetsChanged() async {
@@ -487,22 +605,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
             icon: const Icon(Icons.logout),
           ),
           IconButton(
-            icon: const Icon(Icons.account_balance_wallet_outlined),
-            tooltip: 'Balances',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => GroupBalanceScreen(
-                    tripId: t.id,
-                    currency: t.currency,
-                    api: widget.api,
-                  ),
-                ),
-              );
-            },
-          ),
-          IconButton(
             tooltip: 'Settings',
             icon: const Icon(Icons.settings_outlined),
             onPressed: () {
@@ -524,6 +626,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               );
             },
+          ),
+          PopupMenuButton<String>(
+            onSelected: (v) {
+              if (v == 'currencies') _manageSpendCurrencies();
+              if (v == 'balances') {
+                Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => GroupBalanceScreen(tripId: _activeTrip!.id, currency: _activeTrip!.currency, api: widget.api, participants: _activeTrip!.participants, spendCurrencies: _activeTrip!.spendCurrencies),
+                ));
+              }
+            },
+            itemBuilder: (_) => const [
+              PopupMenuItem(value: 'currencies', child: Text('Spend currencies…')),
+              PopupMenuItem(value: 'balances', child: Text('View balances')),
+            ],
           ),
         ],
       ),
@@ -642,7 +758,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                         // -----------------------
                         // 👇 NEW: Per-currency breakdown (backend conversion, null-safe)
                         const SizedBox(height: 8),
-                        Text('Spent currencies:', style: Theme.of(context).textTheme.bodySmall),
+                        Text('Spent currencies:', style: Theme.of(context).textTheme.labelMedium),
                         const SizedBox(height: 4),
 
                         Builder(builder: (_) {
@@ -661,11 +777,21 @@ class _DashboardScreenState extends State<DashboardScreen> {
                                 if (c.toUpperCase() == t.currency.toUpperCase()) {
                                   rows.add(Text('${raw.toStringAsFixed(2)} $c'));
                                 } else if (approx == null || !approx.containsKey(c)) {
-                                  rows.add(Text('${raw.toStringAsFixed(2)} $c (≈ … ${t.currency})'));
+                                  rows.add(Text.rich(TextSpan(children: [
+                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
+                                    TextSpan(
+                                      text: ' (≈ … ${t.currency})',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ])));
                                 } else {
-                                  rows.add(Text(
-                                    '${raw.toStringAsFixed(2)} $c (≈ ${approx[c]!.toStringAsFixed(2)} ${t.currency})',
-                                  ));
+                                  rows.add(Text.rich(TextSpan(children: [
+                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
+                                    TextSpan(
+                                      text: ' (≈ ${approx[c]!.toStringAsFixed(2)} ${t.currency})',
+                                      style: Theme.of(context).textTheme.bodySmall,
+                                    ),
+                                  ])));
                                 }
                               }
 
