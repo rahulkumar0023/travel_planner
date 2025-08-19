@@ -21,6 +21,8 @@ import 'budgets_screen.dart';
 import 'trip_selection_screen.dart';
 // 👇 NEW import start
 import '../services/budgets_sync.dart';
+// 👇 NEW: read budgets cache to keep Home in sync with Budgets tab
+import '../services/local_budget_store.dart';
 // 👇 NEW import end
 // imports patch end
 
@@ -63,6 +65,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // 👇 NEW: subscribe to budgets changes start
     BudgetsSync.instance.addListener(_onBudgetsChanged);
     // 👇 NEW: subscribe to budgets changes end
+
+    // 👇 NEW: sync budget override from cache on first frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeSyncTripBudgetOverrideFromCache();
+    });
   }
 // initState patch end
 
@@ -70,6 +77,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _boot() async {
     await _ensureActiveTrip();
     await _loadLocal();            // will recalc + then update home (see patch below)
+    await _loadTripBudgetOverride();
   }
 
 
@@ -254,6 +262,40 @@ class _DashboardScreenState extends State<DashboardScreen> {
     }
   }
 
+  // _maybeSyncTripBudgetOverrideFromCache start
+  Future<void> _maybeSyncTripBudgetOverrideFromCache() async {
+    final t = _activeTrip;
+    if (t == null) return;
+
+    // Read cached budgets (written by Budgets screen / fetchBudgetsOrCache).
+    final cached = await LocalBudgetStore.load();
+
+    Budget? match;
+    for (final b in cached) {
+      if (b.kind == BudgetKind.trip &&
+          (b.tripId == t.id ||
+              ((b.name ?? '').toLowerCase() == t.name.toLowerCase()))) {
+        match = b;
+        break;
+      }
+    }
+
+    final newAmt = match?.amount;
+    if (newAmt != null && newAmt != _tripBudgetOverride) {
+      if (!mounted) return;
+      setState(() => _tripBudgetOverride = newAmt);
+    }
+  }
+  // _maybeSyncTripBudgetOverrideFromCache end
+
+  // _maybeRefreshOverrideFromServer start
+  Future<void> _maybeRefreshOverrideFromServer() async {
+    try {
+      await _loadTripBudgetOverride();
+    } catch (_) {/* ignore */}
+  }
+  // _maybeRefreshOverrideFromServer end
+
   Future<void> _clearTripSelection() async {
     await TripStorageService.clear();
     widget.onSwitchTrip();
@@ -339,6 +381,12 @@ class _DashboardScreenState extends State<DashboardScreen> {
   @override
   Widget build(BuildContext context) {
     final t = _activeTrip;
+
+    // 👇 NEW: cheap check from cache & optional server refresh after frame
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _maybeSyncTripBudgetOverrideFromCache();
+      _maybeRefreshOverrideFromServer();
+    });
 
     if (t == null) {
       return Scaffold(
