@@ -4,6 +4,8 @@ import '../services/local_budget_store.dart';
 import '../models/budget.dart';
 import '../services/trip_storage_service.dart';
 import '../models/currencies.dart';
+// 👇 NEW: remember last-used currency per trip
+import '../services/last_used_store.dart';
 
 class ExpenseFormScreen extends StatefulWidget {
   const ExpenseFormScreen({
@@ -73,9 +75,21 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     ];
 
     _expenseCurrency = initial;
-
+    _loadSavedCurrency(); // 👈 NEW: apply last-used if available
   }
 // expense form initState fix end
+
+// 👇 NEW: load last-used currency for this trip
+// _loadSavedCurrency method start
+  Future<void> _loadSavedCurrency() async {
+    final trip = TripStorageService.loadLightweight();
+    final saved = await LastUsedStore.getExpenseCurrencyForTrip(trip?.id ?? '');
+    if (!mounted) return;
+    if (saved != null && _currencyChoices.contains(saved)) {
+      setState(() => _expenseCurrency = saved);
+    }
+  }
+// _loadSavedCurrency method end
 
 
   void _save() {
@@ -144,7 +158,19 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
           DropdownButtonFormField<String>(
             value: _expenseCurrency,
             decoration: const InputDecoration(labelText: 'Currency'),
-            onChanged: (v) => setState(() => _expenseCurrency = v ?? _expenseCurrency),
+            // 👇 NEW: persist the choice per trip
+            // currency onChanged start
+            onChanged: (v) async {
+              final newCcy = v ?? _expenseCurrency;
+              if (!mounted) return;
+              setState(() => _expenseCurrency = newCcy);
+
+              final trip = TripStorageService.loadLightweight();
+              if (trip != null) {
+                await LastUsedStore.setExpenseCurrencyForTrip(trip.id, newCcy);
+              }
+            },
+            // currency onChanged end
             items: _currencyChoices
                 .map((c) => DropdownMenuItem(value: c, child: Text(c)))
                 .toList(),
