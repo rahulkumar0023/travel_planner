@@ -19,8 +19,9 @@ import 'participants_screen.dart';
 import 'settings_screen.dart';
 import 'budgets_screen.dart';
 import 'trip_selection_screen.dart';
+// 👇 NEW import start
 import '../services/budgets_sync.dart';
-import '../services/budgets_sync.dart';// <-- keep
+// 👇 NEW import end
 // imports patch end
 
 
@@ -39,7 +40,6 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> {
-  late final VoidCallback _budgetsListener;
 
 
   double _spentInTripCcy = 0.0;
@@ -60,14 +60,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     _box = Hive.box<Expense>('expensesBox');
     _boot(); // 👈 NEW
 
-    _budgetsListener = () async {
-      if (!mounted) return;
-      await _loadTripBudgetOverride();    // re-pulls the linked/synthesized budget
-      // (spent/home don’t depend on budgets, so no need to recalc here)
-    };
-    BudgetsSync.version.addListener(_budgetsListener);
-// budgets listener end
-
+    // 👇 NEW: subscribe to budgets changes start
+    BudgetsSync.instance.addListener(_onBudgetsChanged);
+    // 👇 NEW: subscribe to budgets changes end
   }
 // initState patch end
 
@@ -264,6 +259,17 @@ class _DashboardScreenState extends State<DashboardScreen> {
     widget.onSwitchTrip();
   }
 
+// 👇 NEW: budgets change handler
+// _onBudgetsChanged method start
+  void _onBudgetsChanged() async {
+    // Re-read the matching Trip Budget (so “Budget: …” stays correct)
+    await _loadTripBudgetOverride();
+    // Optional: also refresh conversions if you want
+    await _updateApproxHome();
+    if (mounted) setState(() {}); // repaint the card
+  }
+// _onBudgetsChanged method end
+
   Future<void> _addExpenseForm() async {
     final t = _activeTrip;
     if (t == null) return;
@@ -321,13 +327,13 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
 
 
-  // dispose override start
+  // 👇 NEW: dispose listener start
   @override
   void dispose() {
-    BudgetsSync.version.removeListener(_budgetsListener);
+    BudgetsSync.instance.removeListener(_onBudgetsChanged);
     super.dispose();
   }
-// dispose override end
+// 👇 NEW: dispose listener end
 
 
   @override
