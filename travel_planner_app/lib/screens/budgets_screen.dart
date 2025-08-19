@@ -5,7 +5,6 @@ import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
 import '../services/fx_service.dart';
 import '../services/budgets_sync.dart';
-import '../services/local_budget_store.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -148,13 +147,14 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   }
 
   Future<void> _createTripDialog() async {
+    // NEW: load trips for optional attachment
+    final trips = await widget.api.fetchTripsOrCache();
+    final active = TripStorageService.loadLightweight();
+    String selectedTripId = active?.id ?? '';
+
     final nameCtrl = TextEditingController();
     final amountCtrl = TextEditingController();
     final currencyCtrl = TextEditingController(text: _home);
-
-    // 👇 NEW: detect the current trip from local storage
-    final active = TripStorageService.loadLightweight();
-    bool attachToActive = active != null; // default ON if a trip exists
 
     final ok = await showDialog<bool>(
       context: context,
@@ -165,21 +165,26 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
           children: [
             TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name (e.g. Krakow Trip)')),
             const SizedBox(height: 8),
-            TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
+            TextField(
+                controller: amountCtrl,
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                decoration: const InputDecoration(labelText: 'Amount')),
             const SizedBox(height: 8),
-            TextField(controller: currencyCtrl, decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
-            if (active != null) ...[
-              const SizedBox(height: 8),
-              // 👇 NEW: Let user choose to attach this budget to the active trip
-              StatefulBuilder(
-                builder: (_, setStateDialog) => CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  value: attachToActive,
-                  onChanged: (v) => setStateDialog(() => attachToActive = v ?? true),
-                  title: Text('Attach to current trip (${active.name})'),
-                ),
-              ),
-            ],
+            TextField(
+                controller: currencyCtrl,
+                textCapitalization: TextCapitalization.characters,
+                decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
+            const SizedBox(height: 12),
+            // NEW: attach to an existing trip (optional)
+            DropdownButtonFormField<String>(
+              value: selectedTripId,
+              decoration: const InputDecoration(labelText: 'Attach to trip (optional)'),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('— none —')),
+                ...trips.map((t) => DropdownMenuItem(value: t.id, child: Text(t.name))),
+              ],
+              onChanged: (v) => selectedTripId = v ?? '',
+            ),
           ],
         ),
         actions: [
@@ -189,39 +194,28 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       ),
     );
 
-    if (ok != true) return;
-
-    try {
-      final created = await widget.api.createBudget(
-        kind: BudgetKind.trip,
-        currency: currencyCtrl.text.trim().toUpperCase(),
-        amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
-        name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
-        // 👇 NEW: attach to active trip when opted in
-        tripId: (attachToActive && active != null) ? active.id : null,
-      );
-
-      // Optional: push into local cache immediately so Home sees it
-      final cached = await LocalBudgetStore.load();
-      cached.add(created);
-      await LocalBudgetStore.save(cached);
-
-      if (attachToActive && active != null) {
-        _knownTripIds.add(active.id);
-      }
-
-      await _refresh();
-      BudgetsSync.instance.bump();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Trip budget created')),
+    if (ok == true) {
+      try {
+        await widget.api.createBudget(
+          kind: BudgetKind.trip,
+          currency: currencyCtrl.text.trim().toUpperCase(),
+          amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
+          name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
+          tripId: selectedTripId.isEmpty ? null : selectedTripId, // ← attach here
         );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not create budget: $e')),
-        );
+        await _refresh();
+        BudgetsSync.instance.bump();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Trip budget created')),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Could not create budget: $e')),
+          );
+        }
       }
     }
   }
@@ -334,41 +328,6 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     }
   }
 
-  Future<void> _linkTripBudgetToActiveTrip(Budget tripBudget) async {
-    final active = TripStorageService.loadLightweight();
-    if (active == null) {
-      _showSnack('No active trip to link');
-      return;
-    }
-    try {
-      final updated = await widget.api.updateBudget(
-        id: tripBudget.id,
-        kind: BudgetKind.trip,
-        currency: tripBudget.currency,
-        amount: tripBudget.amount,
-        name: tripBudget.name,
-        // 👇 set / change the owning trip
-        tripId: active.id,
-        linkedMonthlyBudgetId: tripBudget.linkedMonthlyBudgetId,
-      );
-
-      // update local cache immediately
-      final cache = await LocalBudgetStore.load();
-      final idx = cache.indexWhere((b) => b.id == updated.id);
-      if (idx >= 0) {
-        cache[idx] = updated;
-        await LocalBudgetStore.save(cache);
-      }
-
-      _knownTripIds.add(active.id);
-
-      await _refresh();
-      BudgetsSync.instance.bump();
-      _showSnack('Linked to trip: ${active.name}');
-    } catch (e) {
-      _showSnack('Could not link to trip: $e');
-    }
-  }
 
   Future<void> _unlinkTrip(Budget t) async {
     try {
@@ -377,6 +336,58 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       _showSnack('Unlinked from monthly');
     } catch (e) {
       _showSnack('Could not unlink: $e');
+    }
+  }
+
+  Future<void> _attachToTrip(Budget b) async {
+    final trips = await widget.api.fetchTripsOrCache();
+    final pickedId = await showDialog<String>(
+      context: context,
+      builder: (ctx) => SimpleDialog(
+        title: const Text('Attach to trip'),
+        children: [
+          for (final t in trips)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(ctx, t.id),
+              child: Text(t.name),
+            ),
+        ],
+      ),
+    );
+    if (pickedId == null) return;
+
+    try {
+      await widget.api.updateBudget(
+        id: b.id,
+        kind: BudgetKind.trip,
+        currency: b.currency,
+        amount: b.amount,
+        name: b.name,
+        tripId: pickedId, // ← attach
+        linkedMonthlyBudgetId: b.linkedMonthlyBudgetId,
+      );
+      await _refresh();
+      _showSnack('Attached to trip');
+    } catch (e) {
+      _showSnack('Could not attach: $e');
+    }
+  }
+
+  Future<void> _detachFromTrip(Budget b) async {
+    try {
+      await widget.api.updateBudget(
+        id: b.id,
+        kind: BudgetKind.trip,
+        currency: b.currency,
+        amount: b.amount,
+        name: b.name,
+        tripId: null, // ← detach
+        linkedMonthlyBudgetId: b.linkedMonthlyBudgetId,
+      );
+      await _refresh();
+      _showSnack('Detached from trip');
+    } catch (e) {
+      _showSnack('Could not detach: $e');
     }
   }
 
@@ -708,8 +719,19 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                             Text('Spent: ${_money(t.currency, spent)}'),
                             Text('Remaining: ${_money(t.currency, remaining)}'),
                             const SizedBox(height: 4),
+                          ];
 
-                            // Linked label (always show, even before future resolves)
+                          if (t.tripId == null) {
+                            lines.add(
+                              Text(
+                                'Not attached to any trip — attach to show spent',
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            );
+                          }
+
+                          // Linked label (always show, even before future resolves)
+                          lines.add(
                             Row(
                               mainAxisSize: MainAxisSize.min,
                               children: [
@@ -724,8 +746,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                                 ),
                               ],
                             ),
-                          ];
-
+                          );
+                          
                           // ≈ linked monthly currency line (only when linked and computed)
                           if (linkedApprox.hasData) {
                             final linked = _monthlyById(t.linkedMonthlyBudgetId, monthly)!;
@@ -747,25 +769,32 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
 
                       trailing: PopupMenuButton<String>(
-                        onSelected: (v) {
-                          if (v == 'link') _linkTripToMonthly(t, monthly);
-                          if (v == 'unlink') _unlinkTrip(t);
+                        onSelected: (v) async {
                           if (v == 'edit') _editTrip(t);
                           if (v == 'delete') _deleteBudget(t);
-                          if (v == 'link_to_active') _linkTripBudgetToActiveTrip(t);
+                          if (v == 'link') _linkTripToMonthly(t, monthly);
+                          if (v == 'unlink') _unlinkTrip(t);
+                          // NEW:
+                          if (v == 'attach') _attachToTrip(t);
+                          if (v == 'change_trip') _attachToTrip(t);
+                          if (v == 'detach_trip') _detachFromTrip(t);
                         },
                         itemBuilder: (_) => [
                           const PopupMenuItem(value: 'edit', child: Text('Edit')),
                           const PopupMenuItem(value: 'delete', child: Text('Delete')),
                           const PopupMenuDivider(),
-                          if (TripStorageService.loadLightweight() != null &&
-                              t.tripId != TripStorageService.loadLightweight()!.id)
-                            const PopupMenuItem(value: 'link_to_active', child: Text('Link to current trip')),
                           if (t.linkedMonthlyBudgetId == null)
                             const PopupMenuItem(value: 'link', child: Text('Link to monthly'))
                           else ...[
                             const PopupMenuItem(value: 'link', child: Text('Change link')),
                             const PopupMenuItem(value: 'unlink', child: Text('Unlink')),
+                          ],
+                          const PopupMenuDivider(),
+                          if (t.tripId == null) ...[
+                            const PopupMenuItem(value: 'attach', child: Text('Attach to trip')),
+                          ] else ...[
+                            const PopupMenuItem(value: 'change_trip', child: Text('Change trip…')),
+                            const PopupMenuItem(value: 'detach_trip', child: Text('Detach from trip')),
                           ],
                         ],
                       ),
