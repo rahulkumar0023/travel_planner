@@ -9,6 +9,8 @@ import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
 import '../models/budget.dart'; // for BudgetKind.trip
 // 👇 NEW import start
 import '../services/budgets_sync.dart';
+// 👇 NEW: to update budgets cache immediately
+import '../services/local_budget_store.dart';
 // 👇 NEW import end
 // imports patch end
 
@@ -50,15 +52,21 @@ Future<void> _ensureTripBudgetForTrip({
     final already = budgets.any((b) =>
         b.kind == BudgetKind.trip && b.tripId == trip.id);
 
-    if (!already) {
-      // 2) Create one (amount = trip.initialBudget; currency = trip.currency)
-      await widget.api.createBudget(
+    if (!already && trip.initialBudget > 0) {
+      // 2) Create & cache the Trip Budget so Home sees it right away
+      final newBudget = await widget.api.createBudget(
         kind: BudgetKind.trip,
         currency: trip.currency,
         amount: trip.initialBudget,
         tripId: trip.id,
         name: trip.name,
       );
+
+      // 👇 NEW: push it into the local cache
+      final existing = await LocalBudgetStore.load();
+      existing.add(newBudget);
+      await LocalBudgetStore.save(existing);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Trip budget created')),
