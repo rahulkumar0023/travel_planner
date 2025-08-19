@@ -75,6 +75,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // 👇 NEW: sync budget override from cache on first frame
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _maybeSyncTripBudgetOverrideFromCache();
+      _syncActiveTripExpenses();
     });
   }
 // initState patch end
@@ -153,10 +154,9 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (picked != null) {
       await TripStorageService.save(picked);
       setState(() => _activeTrip = picked);
-      // refresh dependent UI
-      await _loadLocal();
-      await _updateApproxHome();
+      await _syncActiveTripExpenses();
       await _loadTripBudgetOverride();
+      await _updateApproxHome();
     }
   }
 // _openTripPicker method (final) end
@@ -244,6 +244,39 @@ class _DashboardScreenState extends State<DashboardScreen> {
       });
     } catch (_) {
       // ignore conversion errors for now
+    }
+  }
+
+  Future<void> _syncActiveTripExpenses({bool silent = true}) async {
+    final t = _activeTrip;
+    if (t == null) return;
+    try {
+      // 1) pull latest from server
+      final remote = await widget.api.fetchExpenses(t.id);
+
+      // 2) wipe this trip's local rows and re-add from server
+      final toDelete = _box.values.where((e) => e.tripId == t.id).toList();
+      for (final e in toDelete) {
+        try {
+          await e.delete();
+        } catch (_) {}
+      }
+      for (final r in remote) {
+        await _box.add(r);
+      }
+
+      // 3) refresh UI + totals
+      await _loadLocal();
+      await _recalcSpentInTripCurrency();
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Expenses synced')));
+      }
+    } catch (e) {
+      if (!silent && mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Sync failed: $e')));
+      }
     }
   }
 

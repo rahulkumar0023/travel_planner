@@ -37,6 +37,10 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   Future<void> _refresh() async {
     setState(() { _loadingSpends = true; });
 
+    // reset any stale spend caches
+    _spentByTrip.clear();
+    _spentLoadedFor.clear();
+
     // 1) load known trips (server first, fallback inside the helper if you use it)
     List<Trip> trips = <Trip>[];
     try {
@@ -50,11 +54,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     });
     final budgets = await _future;
 
-    // 3) clear spent caches for any removed trip
-    _spentByTrip.removeWhere((tripId, _) => !_knownTripIds.contains(tripId));
-    _spentLoadedFor.removeWhere((tripId) => !_knownTripIds.contains(tripId));
-
-    // 4) recalc spends for the remaining visible budgets
+    // 3) recalc spends for visible budgets
     await _recalcSpends(budgets);
 
     if (!mounted) return;
