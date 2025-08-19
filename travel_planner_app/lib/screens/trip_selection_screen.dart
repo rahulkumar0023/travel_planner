@@ -7,6 +7,9 @@ import '../services/trip_storage_service.dart';
 import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
 // imports patch start
 import '../models/budget.dart'; // for BudgetKind.trip
+// 👇 NEW import start
+import '../services/budgets_sync.dart';
+// 👇 NEW import end
 // imports patch end
 
 class TripSelectionScreen extends StatefulWidget {
@@ -161,6 +164,10 @@ Future<void> _ensureTripBudgetForTrip({
       // auto-create trip budget call start
       await _ensureTripBudgetForTrip(trip: saved);
       // auto-create trip budget call end
+
+      // 👇 NEW: signal budgets changed (home card will refresh) start
+      BudgetsSync.instance.bump();
+      // 👇 NEW: signal budgets changed (home card will refresh) end
 
       await TripStorageService.save(saved);
       if (mounted) {
