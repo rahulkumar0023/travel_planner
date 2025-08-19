@@ -22,6 +22,10 @@ class Expense extends HiveObject {
   @HiveField(8)
   String currency; // <-- add
 
+  // NEW:
+  @HiveField(9)
+  String? receiptPath; // local file path in app docs dir
+
   Expense({
     required this.id,
     required this.tripId,
@@ -32,6 +36,7 @@ class Expense extends HiveObject {
     required this.paidBy,
     required this.sharedWith,
     required this.currency, // <-- add
+    this.receiptPath,        // NEW
   });
 
   factory Expense.fromJson(Map<String, dynamic> json) => Expense(
@@ -44,6 +49,7 @@ class Expense extends HiveObject {
     paidBy: (json['paidBy'] as String?) ?? '',
     sharedWith: (json['sharedWith'] as List<dynamic>?)?.cast<String>() ?? const <String>[],
     currency: (json['currency'] as String?) ?? '',
+    // receipt is LOCAL-ONLY for now; ignore server
   );
 
 

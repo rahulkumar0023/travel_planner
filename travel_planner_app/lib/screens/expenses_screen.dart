@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 import '../models/expense.dart';
 import '../models/trip.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../models/budget.dart'; // for BudgetKind
+import 'receipt_viewer_screen.dart';
 
 class ExpensesScreen extends StatefulWidget {
   final ApiService api;
@@ -103,6 +105,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         paidBy: paidBy.text.trim(),
         sharedWith: e.sharedWith,
         currency: currency,
+        receiptPath: e.receiptPath,
       );
       await widget.api.updateExpense(updated);
     }
@@ -143,8 +146,27 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               itemBuilder: (_, i) {
                 final e = expenses[i];
                 return ListTile(
+                  leading: (e.receiptPath != null && e.receiptPath!.isNotEmpty)
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(6),
+                          child: Image.file(
+                            File(e.receiptPath!),
+                            width: 44,
+                            height: 44,
+                            fit: BoxFit.cover,
+                          ),
+                        )
+                      : const Icon(Icons.receipt_long_outlined),
                   title: Text(e.title),
                   subtitle: Text('${e.category} • ${e.paidBy}'),
+                  onTap: () {
+                    if (e.receiptPath == null || e.receiptPath!.isEmpty) return;
+                    Navigator.of(context).push(
+                      MaterialPageRoute(
+                        builder: (_) => ReceiptViewerScreen(path: e.receiptPath!),
+                      ),
+                    );
+                  },
                   trailing: PopupMenuButton<String>(
                     onSelected: (v) async {
                       if (v == 'edit') {

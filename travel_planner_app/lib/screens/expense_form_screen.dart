@@ -1,5 +1,8 @@
 import 'package:flutter/material.dart';
+import 'dart:io';
 // add near the top
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import '../services/local_budget_store.dart';
 import '../models/budget.dart';
 import '../services/trip_storage_service.dart';
@@ -25,6 +28,7 @@ class ExpenseFormScreen extends StatefulWidget {
     required String paidBy,
     required List<String> sharedWith,
     required String currency,        // <-- add this line
+    String? receiptPath,                 // NEW
   }) onSubmit;
   final String? defaultCurrency;
 
@@ -36,6 +40,8 @@ class ExpenseFormScreen extends StatefulWidget {
 class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 
 // 👇 NEW: dropdown data + selection
+  String? _receiptPath;
+  final _picker = ImagePicker();
   late List<String> _currencyChoices;
   late String _expenseCurrency;
   final _title = TextEditingController();
@@ -92,6 +98,28 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 // _loadSavedCurrency method end
 
 
+  Future<void> _pickReceipt(ImageSource src) async {
+    final x = await _picker.pickImage(
+      source: src,
+      maxWidth: 2048,
+      imageQuality: 85,
+    );
+    if (x == null) return;
+
+    // Copy into app documents for persistence
+    final dir = await getApplicationDocumentsDirectory();
+    final fileName = 'receipt_'
+        '${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final dest = File('${dir.path}/$fileName');
+    await File(x.path).copy(dest.path);
+
+    if (!mounted) return;
+    setState(() => _receiptPath = dest.path);
+  }
+
+  void _removeReceipt() => setState(() => _receiptPath = null);
+
+
   void _save() {
     final title = _title.text.trim();
     final amount = double.tryParse(_amount.text.trim()) ?? 0;
@@ -103,6 +131,7 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
       paidBy: _paidBy,
       sharedWith: _shared.toList(),
       currency: _expenseCurrency, // <-- pass the chosen currency
+      receiptPath: _receiptPath,               // NEW
     );
     Navigator.pop(context);
   }
@@ -178,7 +207,43 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 
           // Currency field end
 
+          const SizedBox(height: 12),
+          Text('Receipt', style: Theme.of(context).textTheme.labelLarge),
           const SizedBox(height: 8),
+          Row(
+            children: [
+              OutlinedButton.icon(
+                icon: const Icon(Icons.photo_camera_outlined),
+                label: const Text('Camera'),
+                onPressed: () => _pickReceipt(ImageSource.camera),
+              ),
+              const SizedBox(width: 8),
+              OutlinedButton.icon(
+                icon: const Icon(Icons.photo_library_outlined),
+                label: const Text('Gallery'),
+                onPressed: () => _pickReceipt(ImageSource.gallery),
+              ),
+              const SizedBox(width: 8),
+              if (_receiptPath != null)
+                IconButton(
+                  tooltip: 'Remove',
+                  onPressed: _removeReceipt,
+                  icon: const Icon(Icons.close),
+                ),
+            ],
+          ),
+          if (_receiptPath != null) ...[
+            const SizedBox(height: 8),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Image.file(
+                File(_receiptPath!),
+                height: 120,
+                width: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            ),
+          ],
           const Text('Shared with'),
           const SizedBox(height: 4),
           // shared-with list from _participants start
