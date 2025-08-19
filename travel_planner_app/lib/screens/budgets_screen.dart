@@ -5,6 +5,7 @@ import '../services/trip_storage_service.dart';
 import '../models/budget.dart';
 import '../services/fx_service.dart';
 import '../services/budgets_sync.dart';
+import '../services/local_budget_store.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -151,6 +152,10 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     final amountCtrl = TextEditingController();
     final currencyCtrl = TextEditingController(text: _home);
 
+    // 👇 NEW: detect the current trip from local storage
+    final active = TripStorageService.loadLightweight();
+    bool attachToActive = active != null; // default ON if a trip exists
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -163,6 +168,18 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
             TextField(controller: amountCtrl, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
             const SizedBox(height: 8),
             TextField(controller: currencyCtrl, decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
+            if (active != null) ...[
+              const SizedBox(height: 8),
+              // 👇 NEW: Let user choose to attach this budget to the active trip
+              StatefulBuilder(
+                builder: (_, setStateDialog) => CheckboxListTile(
+                  contentPadding: EdgeInsets.zero,
+                  value: attachToActive,
+                  onChanged: (v) => setStateDialog(() => attachToActive = v ?? true),
+                  title: Text('Attach to current trip (${active.name})'),
+                ),
+              ),
+            ],
           ],
         ),
         actions: [
@@ -171,44 +188,42 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         ],
       ),
     );
-    if (ok == true) {
-      try {
-        // 1) Must have an active trip or we can't attach this budget
-        final active = TripStorageService.loadLightweight();
-        if (active == null) {
-          _showSnack('Pick a trip first');
-          return;
-        }
 
-      // 2) Create the Trip budget *attached* to this trip
-        await widget.api.createBudget(
-          kind: BudgetKind.trip,
-          currency: currencyCtrl.text.trim().toUpperCase(),   // or active.currency if you prefer
-          amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
-          tripId: active.id,                                  // <-- REQUIRED so it shows up
-          name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
-        );
+    if (ok != true) return;
 
-        // 3) Let the orphan filter know about this trip immediately
+    try {
+      final created = await widget.api.createBudget(
+        kind: BudgetKind.trip,
+        currency: currencyCtrl.text.trim().toUpperCase(),
+        amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
+        name: nameCtrl.text.trim().isEmpty ? null : nameCtrl.text.trim(),
+        // 👇 NEW: attach to active trip when opted in
+        tripId: (attachToActive && active != null) ? active.id : null,
+      );
+
+      // Optional: push into local cache immediately so Home sees it
+      final cached = await LocalBudgetStore.load();
+      cached.add(created);
+      await LocalBudgetStore.save(cached);
+
+      if (attachToActive && active != null) {
         _knownTripIds.add(active.id);
+      }
 
-        // 4) Refresh list
-        await _refresh();
-        BudgetsSync.instance.bump();
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Trip budget created')),
-          );
-        }
-      } catch (e) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Could not create budget: $e')),
-          );
-        }
+      await _refresh();
+      BudgetsSync.instance.bump();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Trip budget created')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not create budget: $e')),
+        );
       }
     }
-
   }
 
   Future<void> _editMonthly(Budget m) async {
@@ -316,6 +331,42 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       _showSnack('Budget deleted');
     } catch (e) {
       _showSnack('Could not delete: $e');
+    }
+  }
+
+  Future<void> _linkTripBudgetToActiveTrip(Budget tripBudget) async {
+    final active = TripStorageService.loadLightweight();
+    if (active == null) {
+      _showSnack('No active trip to link');
+      return;
+    }
+    try {
+      final updated = await widget.api.updateBudget(
+        id: tripBudget.id,
+        kind: BudgetKind.trip,
+        currency: tripBudget.currency,
+        amount: tripBudget.amount,
+        name: tripBudget.name,
+        // 👇 set / change the owning trip
+        tripId: active.id,
+        linkedMonthlyBudgetId: tripBudget.linkedMonthlyBudgetId,
+      );
+
+      // update local cache immediately
+      final cache = await LocalBudgetStore.load();
+      final idx = cache.indexWhere((b) => b.id == updated.id);
+      if (idx >= 0) {
+        cache[idx] = updated;
+        await LocalBudgetStore.save(cache);
+      }
+
+      _knownTripIds.add(active.id);
+
+      await _refresh();
+      BudgetsSync.instance.bump();
+      _showSnack('Linked to trip: ${active.name}');
+    } catch (e) {
+      _showSnack('Could not link to trip: $e');
     }
   }
 
@@ -701,11 +752,15 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                           if (v == 'unlink') _unlinkTrip(t);
                           if (v == 'edit') _editTrip(t);
                           if (v == 'delete') _deleteBudget(t);
+                          if (v == 'link_to_active') _linkTripBudgetToActiveTrip(t);
                         },
                         itemBuilder: (_) => [
                           const PopupMenuItem(value: 'edit', child: Text('Edit')),
                           const PopupMenuItem(value: 'delete', child: Text('Delete')),
                           const PopupMenuDivider(),
+                          if (TripStorageService.loadLightweight() != null &&
+                              t.tripId != TripStorageService.loadLightweight()!.id)
+                            const PopupMenuItem(value: 'link_to_active', child: Text('Link to current trip')),
                           if (t.linkedMonthlyBudgetId == null)
                             const PopupMenuItem(value: 'link', child: Text('Link to monthly'))
                           else ...[
