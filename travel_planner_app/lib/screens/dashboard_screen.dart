@@ -7,6 +7,8 @@ import '../models/expense.dart';
 import '../models/budget.dart';
 import '../models/currencies.dart';
 
+import 'dart:io';
+
 import '../services/api_service.dart';
 import '../services/prefs_service.dart';
 import '../services/trip_storage_service.dart';
@@ -20,6 +22,7 @@ import 'participants_screen.dart';
 import 'settings_screen.dart';
 import 'budgets_screen.dart';
 import 'trip_selection_screen.dart';
+import 'receipt_viewer_screen.dart'; // NEW file below
 // 👇 NEW import start
 import '../services/budgets_sync.dart';
 // 👇 NEW: read budgets cache to keep Home in sync with Budgets tab
@@ -545,6 +548,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
             required String paidBy,
             required List<String> sharedWith,
             required String currency, // <-- new param
+            String? receiptPath, // NEW
           }) async {
             final e = Expense(
               id: DateTime.now().toIso8601String(),
@@ -556,6 +560,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
               paidBy: paidBy,
               sharedWith: sharedWith,
               currency : currency, // <-- new param
+              receiptPath: receiptPath,                 // NEW
             );
             await _box.add(e); // local first (Hive)
             setState(() => _expenses.insert(0, e));
@@ -871,10 +876,29 @@ class _DashboardScreenState extends State<DashboardScreen> {
           else
             ..._expenses.reversed.map(
               (e) => ListTile(
+                leading: (e.receiptPath != null && e.receiptPath!.isNotEmpty)
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(6),
+                        child: Image.file(
+                          File(e.receiptPath!),
+                          width: 44,
+                          height: 44,
+                          fit: BoxFit.cover,
+                        ),
+                      )
+                    : const Icon(Icons.receipt_long_outlined),
                 title: Text(e.title),
                 subtitle: Text(
                   '${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}',
                 ),
+                onTap: () {
+                  if (e.receiptPath == null || e.receiptPath!.isEmpty) return;
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => ReceiptViewerScreen(path: e.receiptPath!),
+                    ),
+                  );
+                },
                 trailing: Text('${e.amount.toStringAsFixed(2)} ${e.currency}'),
               ),
             ),
