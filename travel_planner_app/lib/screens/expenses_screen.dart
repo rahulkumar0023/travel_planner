@@ -3,6 +3,7 @@ import '../models/expense.dart';
 import '../models/trip.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
+import '../models/budget.dart'; // for BudgetKind
 
 class ExpensesScreen extends StatefulWidget {
   final ApiService api;
@@ -32,30 +33,65 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     await _future;
   }
 
+  Future<List<String>> _currencyChoicesForTrip() async {
+    final t = _trip;
+    if (t == null) return <String>['EUR'];
+    final budgets = await widget.api.fetchBudgetsOrCache();
+    final set = <String>{t.currency.toUpperCase()};
+    for (final b in budgets) {
+      if (b.kind == BudgetKind.trip && b.tripId == t.id) {
+        set.add(b.currency.toUpperCase());
+      }
+    }
+    final list = set.toList()..sort();
+    return list;
+  }
+
   Future<void> _editExpenseDialog(Expense e) async {
     final title = TextEditingController(text: e.title);
     final amount = TextEditingController(text: e.amount.toString());
     final category = TextEditingController(text: e.category);
     final paidBy = TextEditingController(text: e.paidBy);
+
+    final choices = await _currencyChoicesForTrip();
+    String currency = choices.contains(e.currency.toUpperCase())
+        ? e.currency.toUpperCase()
+        : (_trip?.currency.toUpperCase() ?? 'EUR');
+
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('Edit expense'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
-          const SizedBox(height: 8),
-          TextField(controller: amount, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: const InputDecoration(labelText: 'Amount')),
-          const SizedBox(height: 8),
-          TextField(controller: category, decoration: const InputDecoration(labelText: 'Category')),
-          const SizedBox(height: 8),
-          TextField(controller: paidBy, decoration: const InputDecoration(labelText: 'Paid by')),
-        ]),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: title, decoration: const InputDecoration(labelText: 'Title')),
+            const SizedBox(height: 8),
+            TextField(
+              controller: amount,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Amount'),
+            ),
+            const SizedBox(height: 8),
+            TextField(controller: category, decoration: const InputDecoration(labelText: 'Category')),
+            const SizedBox(height: 8),
+            TextField(controller: paidBy, decoration: const InputDecoration(labelText: 'Paid by')),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: currency,
+              decoration: const InputDecoration(labelText: 'Currency'),
+              onChanged: (v) => currency = (v ?? currency),
+              items: choices.map((c) => DropdownMenuItem(value: c, child: Text(c))).toList(),
+            ),
+          ],
+        ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
           FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Save')),
         ],
       ),
     );
+
     if (ok == true) {
       final updated = Expense(
         id: e.id,
@@ -66,8 +102,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
         date: e.date,
         paidBy: paidBy.text.trim(),
         sharedWith: e.sharedWith,
-        currency: e.currency
-
+        currency: currency,
       );
       await widget.api.updateExpense(updated);
     }
