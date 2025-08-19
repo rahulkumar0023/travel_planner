@@ -55,6 +55,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   double? _tripBudgetOverride; // filled if we detect a matching Trip budget
 
+  // --- linked monthly info for the active trip budget ---
+  Budget? _tripBudgetObj;          // the trip's Budget row (kind=trip)
+  Budget? _linkedMonthlyObj;       // the linked monthly budget, if any
+  double? _budgetApproxInLinked;   // ≈ trip budget amount in the monthly currency
+
 // initState patch start
   @override
   void initState() {
@@ -244,22 +249,66 @@ class _DashboardScreenState extends State<DashboardScreen> {
   Future<void> _loadTripBudgetOverride() async {
     final t = _activeTrip;
     if (t == null) return;
+
     try {
       final all = await widget.api.fetchBudgetsOrCache();
-      Budget? match;
+
+      // 1) find the trip budget for the current trip (by tripId or name)
+      Budget? tripB;
       for (final b in all) {
         if (b.kind == BudgetKind.trip &&
             ((b.tripId != null && b.tripId == t.id) ||
                 ((b.name ?? '').toLowerCase() == t.name.toLowerCase()))) {
-          match = b;
+          tripB = b;
           break;
         }
       }
+
+      // 2) locate the linked monthly (if any)
+      Budget? linked;
+      if (tripB?.linkedMonthlyBudgetId != null) {
+        for (final b in all) {
+          if (b.kind == BudgetKind.monthly && b.id == tripB!.linkedMonthlyBudgetId) {
+            linked = b;
+            break;
+          }
+        }
+      }
+
+      // 3) compute ≈ of the trip *budget amount* in the linked monthly currency
+      double? approx;
+      if (tripB != null && linked != null) {
+        try {
+          approx = await widget.api.convert(
+            amount: tripB.amount,
+            from: tripB.currency,
+            to: linked.currency,
+          );
+        } catch (_) {
+          approx = null;
+        }
+      }
+
       if (!mounted) return;
-      setState(() => _tripBudgetOverride = match?.amount);
+      setState(() {
+        _tripBudgetOverride   = tripB?.amount; // keep your override logic
+        _tripBudgetObj        = tripB;
+        _linkedMonthlyObj     = linked;
+        _budgetApproxInLinked = approx;
+      });
     } catch (_) {
-      // Ignore errors; we’ll just keep using Trip.initialBudget
+      // ignore; card will simply omit the linked lines
     }
+  }
+
+  String _linkedMonthlyLabel() {
+    final m = _linkedMonthlyObj;
+    if (m == null) return 'Not linked';
+    final mm = m.month ?? 0;
+    final yy = m.year ?? 0;
+    const names = ['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    final when = (mm >= 1 && mm <= 12 && yy > 0) ? '${names[mm]} $yy' : (m.name ?? 'Monthly');
+    return 'Linked to $when Budget (${m.currency})';
   }
 
   // _maybeSyncTripBudgetOverrideFromCache start
@@ -564,6 +613,31 @@ class _DashboardScreenState extends State<DashboardScreen> {
                           Text('≈ ${_approxHomeValue!.toStringAsFixed(2)} $_homeCurrencyCode'),
                         ],
                         // approx home line end
+
+                        // --- linked monthly info (always show a label; ≈ line only when computed) ---
+                        const SizedBox(height: 8),
+                        Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.link, size: 14),
+                            const SizedBox(width: 6),
+                            Flexible(
+                              child: Text(
+                                _linkedMonthlyLabel(),
+                                style: Theme.of(context).textTheme.bodySmall,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          ],
+                        ),
+                        if (_linkedMonthlyObj != null && _budgetApproxInLinked != null)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 2),
+                            child: Text(
+                              '≈ ${_budgetApproxInLinked!.toStringAsFixed(2)} ${_linkedMonthlyObj!.currency} (linked)',
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ),
 
                         // -----------------------
                         // 👇 NEW: Per-currency breakdown (backend conversion, null-safe)
