@@ -7,6 +7,7 @@ import '../models/expense.dart';
 import '../models/trip.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
+import '../services/fx_service.dart';
 
 class ExpensesScreen extends StatefulWidget {
   final ApiService api;
@@ -28,6 +29,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   // cache last-loaded list to filter on it without refetch
   List<Expense> _all = [];
+
+  Map<String, double> _fltByCcy = <String, double>{};
+  double _fltApproxBase = 0.0;
 
   // convenience: detect “any filter active”
   bool get _hasFilters => _fCategory != null || _fCurrency != null || _fRange != null;
@@ -76,15 +80,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Set<String> _currenciesOf(List<Expense> list) =>
       list.map((e) => (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase())).toSet();
 
-  Map<String, double> _sumByCurrency(List<Expense> list) {
-    final m = <String, double>{};
-    for (final e in list) {
-      final c = (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase());
-      m[c] = (m[c] ?? 0) + e.amount;
-    }
-    return m;
-  }
-
   Future<double> _convertToTrip(String from, double amount) async {
     if (from.toUpperCase() == _tripCcy) return amount;
     try {
@@ -94,13 +89,33 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
   }
 
-  Future<double> _approxTotalInTrip(List<Expense> list) async {
-    final by = _sumByCurrency(list);
-    double total = 0.0;
-    for (final entry in by.entries) {
-      total += await _convertToTrip(entry.key, entry.value);
+  Future<void> _recomputeFilteredTotals(List<Expense> items) async {
+    final trip = _trip;
+    if (trip == null) return;
+
+    final byCcy = <String, double>{};
+    for (final e in items) {
+      final c = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
+      byCcy[c] = (byCcy[c] ?? 0) + e.amount;
     }
-    return total;
+
+    final rates = await FxService.loadRates(trip.currency);
+    double sumBase = 0.0;
+    for (final e in items) {
+      final from = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
+      sumBase += FxService.convert(
+        amount: e.amount,
+        from: from,
+        to: trip.currency,
+        ratesForBaseTo: rates,
+      );
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _fltByCcy = byCcy;
+      _fltApproxBase = sumBase;
+    });
   }
 
   Future<void> _exportCsv(List<Expense> list) async {
@@ -207,6 +222,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
           // apply filters
           final expenses = _applyFilters(_all);
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _recomputeFilteredTotals(expenses);
+          });
 
           // --- FILTER BAR ---
           final cats = _categoriesOf(_all).toList()..sort();
@@ -252,8 +270,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             String two(int x) => x.toString().padLeft(2, '0');
             return '${s.year}-${two(s.month)}-${two(s.day)} → ${e.year}-${two(e.month)}-${two(e.day)}';
           }
-
-          final totalsByCcy = _sumByCurrency(expenses);
 
           final filtersAndTotals = Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -314,7 +330,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               ),
               const SizedBox(height: 8),
 
-              // Quick totals
+              // Filtered totals
               Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
@@ -322,36 +338,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text('Filtered totals', style: Theme.of(context).textTheme.titleSmall),
-                      const SizedBox(height: 8),
-                      for (final entry in totalsByCcy.entries) ...[
-                        FutureBuilder<double>(
-                          future: _convertToTrip(entry.key, entry.value),
-                          builder: (_, conv) {
-                            final approx = conv.data;
-                            return Row(
-                              children: [
-                                Expanded(child: Text('${entry.key} ${entry.value.toStringAsFixed(2)}')),
-                                if (approx != null)
-                                  Text('≈ ${approx.toStringAsFixed(2)} $_tripCcy',
-                                      style: Theme.of(context).textTheme.bodySmall),
-                              ],
-                            );
-                          },
-                        ),
-                      ],
-                      const Divider(height: 16),
-                      FutureBuilder<double>(
-                        future: _approxTotalInTrip(expenses),
-                        builder: (_, total) => Row(
-                          children: [
-                            Expanded(child: Text('Total (≈ $_tripCcy)')),
-                            Text(
-                              total.hasData ? total.data!.toStringAsFixed(2) : '…',
-                              style: Theme.of(context).textTheme.titleMedium,
-                            ),
-                          ],
-                        ),
-                      ),
+                      const SizedBox(height: 6),
+                      ..._fltByCcy.entries.map((e) => Text(
+                            '${e.value.toStringAsFixed(2)} ${e.key}',
+                          )),
+                      if (_trip != null)
+                        Text('≈ ${_fltApproxBase.toStringAsFixed(2)} ${_trip!.currency}'),
                     ],
                   ),
                 ),

@@ -61,10 +61,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   double? _tripBudgetOverride; // filled if we detect a matching Trip budget
 
   // Insights state
-  Map<String, double> _byCategoryTripCcy = {}; // category -> amount (trip currency)
-  double _spentTripCcy = 0;                    // total spent (trip currency)
-  double? _dailyBurn;                          // trip currency / day
-  int? _daysLeft;                              // calendar days left in trip (>=0)
+  Map<String, double> _byCcy = <String, double>{};          // e.g. {'EUR': 50, 'INR': 10_000}
+  Map<String, double> _byCategoryBase = <String, double>{}; // in trip currency
+  double _spentInBase = 0.0;
+  double _dailyBurn = 0.0;
+  int? _daysLeft;
 
   bool _isArchivedTrip = false;
 
@@ -98,14 +99,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   Future<void> _boot() async {
     await _ensureActiveTrip();
     await _loadLocal();            // will recalc + then update home (see patch below)
-    await _recalcInsights();
     await _loadTripBudgetOverride();
   }
 
   @override
   void didUpdateWidget(covariant DashboardScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    _recalcInsights();
+    _recomputeInsights();
     final id = _activeTrip?.id;
     if (id != null) {
       ArchivedTripsStore.isArchived(id).then((v) {
@@ -241,66 +241,52 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // --- recalc spent in trip currency end ---
 
-  Future<void> _recalcInsights() async {
+  Future<void> _recomputeInsights() async {
     final t = _activeTrip;
-    if (t == null) {
-      if (mounted) setState(() {
-        _byCategoryTripCcy = {};
-        _spentTripCcy = 0;
-        _dailyBurn = null;
-        _daysLeft = null;
-      });
-      return;
+    if (t == null) return;
+
+    // 1) group by currency (raw)
+    final byCcy = <String, double>{};
+    for (final e in _expenses) {
+      final c = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
+      byCcy[c] = (byCcy[c] ?? 0) + e.amount;
     }
 
-    try {
-      // One FX table for the trip currency
-      final rates = await FxService.loadRates(t.currency);
-
-      // Sum by category in trip currency
-      final map = <String, double>{};
-      double total = 0.0;
-      for (final e in _expenses) {
-        final from = (e.currency.isEmpty) ? t.currency : e.currency;
-        final v = FxService.convert(
-          amount: e.amount,
-          from: from,
-          to: t.currency,
-          ratesForBaseTo: rates,
-        );
-        total += v;
-        map[e.category] = (map[e.category] ?? 0) + v;
-      }
-
-      // Daily burn / days left
-      final now = DateTime.now();
-      final start = DateTime(t.startDate.year, t.startDate.month, t.startDate.day);
-      final end   = DateTime(t.endDate.year,   t.endDate.month,   t.endDate.day);
-      final daysElapsed = (now.isBefore(start))
-          ? 0
-          : now.difference(start).inDays + 1; // count today
-      final daysRemaining = (now.isAfter(end))
-          ? 0
-          : (end.difference(DateTime(now.year, now.month, now.day)).inDays + 1);
-
-      final burn = daysElapsed > 0 ? (total / daysElapsed) : null;
-
-      if (!mounted) return;
-      setState(() {
-        _byCategoryTripCcy = map;
-        _spentTripCcy = total;
-        _dailyBurn = burn;
-        _daysLeft = daysRemaining;
-      });
-    } catch (_) {
-      if (!mounted) return;
-      setState(() {
-        _byCategoryTripCcy = {};
-        _spentTripCcy = _expenses.fold<double>(0, (p, e) => p + e.amount); // fallback (naïve)
-        _dailyBurn = null;
-        _daysLeft = null;
-      });
+    // 2) convert every expense to trip currency (one FX table)
+    final rates = await FxService.loadRates(t.currency);
+    double sumBase = 0.0;
+    final byCatBase = <String, double>{};
+    for (final e in _expenses) {
+      final from = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
+      final base = FxService.convert(
+        amount: e.amount,
+        from: from,
+        to: t.currency,
+        ratesForBaseTo: rates,
+      );
+      sumBase += base;
+      final cat = (e.category.isEmpty ? 'Other' : e.category);
+      byCatBase[cat] = (byCatBase[cat] ?? 0) + base;
     }
+
+    // 3) daily burn & days left
+    final daysSoFar = (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
+    final burn = sumBase / daysSoFar;
+    int? daysLeft;
+    final budget = (_tripBudgetOverride ?? t.initialBudget);
+    if (budget > 0 && burn > 0) {
+      final rem = (budget - sumBase);
+      daysLeft = rem <= 0 ? 0 : (rem / burn).ceil();
+    }
+
+    if (!mounted) return;
+    setState(() {
+      _byCcy = byCcy;
+      _byCategoryBase = byCatBase;
+      _spentInBase = sumBase;
+      _dailyBurn = burn;
+      _daysLeft = daysLeft;
+    });
   }
 
 
@@ -322,7 +308,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
     await _recalcSpentInTripCurrency();
     await _updateApproxHome();
-    await _recalcInsights();
+    await _recomputeInsights();
   }
 // _loadLocal method end
 
@@ -662,8 +648,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             await _box.add(e); // local first (Hive)
             setState(() => _expenses.insert(0, e));
             await _recalcSpentInTripCurrency();
+            await _recomputeInsights();
             await _updateApproxHome();
-            await _recalcInsights();
 
             // 2) ALSO sync to server so Budgets can see it
             try {
@@ -1048,32 +1034,54 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // --- Insights (fixed math) ---
                   Text('Insights', style: Theme.of(context).textTheme.titleMedium),
-                  const SizedBox(height: 8),
-                  // Row: daily burn & days left
-                  Wrap(
-                    spacing: 16,
-                    runSpacing: 4,
+                  const SizedBox(height: 6),
+                  Row(
                     children: [
-                      Text('Daily burn: ${_dailyBurn == null ? '—' : _dailyBurn!.toStringAsFixed(2)} ${_activeTrip!.currency}/day'),
-                      Text('Days left: ${_daysLeft == null ? '—' : _daysLeft}'),
+                      Text('Daily burn: ${_dailyBurn.toStringAsFixed(2)} ${t.currency}/day'),
+                      const SizedBox(width: 16),
+                      Text('Days left: ${_daysLeft ?? 0}'),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  if (_byCategoryTripCcy.isEmpty)
-                    const Text('No spending yet.')
-                  else ...[
-                    Text('By category', style: Theme.of(context).textTheme.bodyMedium),
-                    const SizedBox(height: 8),
-                    _CategoryBars(
-                      data: _byCategoryTripCcy,
-                      currency: _activeTrip!.currency,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      'Total (≈ ${_activeTrip!.currency}): ${_spentTripCcy.toStringAsFixed(2)}',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+                  const SizedBox(height: 6),
+                  Text('By category', style: Theme.of(context).textTheme.bodyMedium),
+                  Builder(builder: (_) {
+                    if (_byCategoryBase.isEmpty) return const SizedBox.shrink();
+                    final max = _byCategoryBase.values.fold<double>(0, (p, v) => v > p ? v : p);
+                    return Column(
+                      children: _byCategoryBase.entries.map((e) {
+                        final pct = max <= 0 ? 0.0 : (e.value / max).clamp(0.0, 1.0);
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 4),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: LinearProgressIndicator(value: pct),
+                              ),
+                              const SizedBox(width: 8),
+                              SizedBox(
+                                width: 120,
+                                child: Text(
+                                  '${e.key} • ${e.value.toStringAsFixed(2)} ${t.currency}',
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      }).toList(),
+                    );
+                  }),
+                  const SizedBox(height: 6),
+                  // “Spent currencies” lines (unchanged list but now also correct overall totals)
+                  if (_byCcy.isNotEmpty) ...[
+                    Text('Spent currencies:', style: Theme.of(context).textTheme.bodyMedium),
+                    ..._byCcy.entries.map((e) => Text(
+                          '${e.value.toStringAsFixed(2)} ${e.key}'
+                          '${e.key.toUpperCase() == t.currency.toUpperCase() ? '' : ' (≈ using FX)'}',
+                        )),
+                    Text('Total spent: ${_spentInBase.toStringAsFixed(2)} ${t.currency}'),
                   ],
                 ],
               ),
@@ -1120,62 +1128,3 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   } 
 }
 
-class _CategoryBars extends StatelessWidget {
-  const _CategoryBars({required this.data, required this.currency});
-  final Map<String, double> data;
-  final String currency;
-
-  @override
-  Widget build(BuildContext context) {
-    final entries = data.entries.toList()
-      ..sort((a, b) => b.value.compareTo(a.value));
-    final maxV = entries.first.value;
-
-    return Column(
-      children: entries.map((e) {
-        return Padding(
-          padding: const EdgeInsets.symmetric(vertical: 4),
-          child: Row(
-            children: [
-              Expanded(
-                flex: 2,
-                child: Text(e.key, overflow: TextOverflow.ellipsis),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                flex: 5,
-                child: LayoutBuilder(
-                  builder: (_, c) {
-                    final w = (e.value / (maxV == 0 ? 1 : maxV)) * c.maxWidth;
-                    return Stack(
-                      children: [
-                        Container(
-                          height: 10,
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.surfaceVariant,
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                        ),
-                        Container(
-                          height: 10,
-                          width: w,
-                          decoration: BoxDecoration(
-                            color: Theme.of(context).colorScheme.primary.withOpacity(0.9),
-                            borderRadius: BorderRadius.circular(6),
-                          ),
-                        ),
-                      ],
-                    );
-                  },
-                ),
-              ),
-              const SizedBox(width: 8),
-              Text('${e.value.toStringAsFixed(2)} $currency',
-                  style: Theme.of(context).textTheme.bodySmall),
-            ],
-          ),
-        );
-      }).toList(),
-    );
-  }
-}
