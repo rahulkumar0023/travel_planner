@@ -30,8 +30,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   // cache last-loaded list to filter on it without refetch
   List<Expense> _all = [];
 
-  Map<String, double> _fltByCcy = <String, double>{};
-  double _fltApproxBase = 0.0;
+  Map<String, double> _filteredByCcy = const {};
+  double _filteredTotalBase = 0.0;
 
   // convenience: detect “any filter active”
   bool get _hasFilters => _fCategory != null || _fCurrency != null || _fRange != null;
@@ -89,32 +89,41 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     }
   }
 
-  Future<void> _recomputeFilteredTotals(List<Expense> items) async {
-    final trip = _trip;
-    if (trip == null) return;
-
-    final byCcy = <String, double>{};
-    for (final e in items) {
-      final c = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
-      byCcy[c] = (byCcy[c] ?? 0) + e.amount;
+  Future<void> _recalcFilteredTotals(List<Expense> items) async {
+    final trip = TripStorageService.loadLightweight();
+    if (trip == null) {
+      if (mounted) {
+        setState(() {
+          _filteredByCcy = const {};
+          _filteredTotalBase = 0.0;
+        });
+      }
+      return;
     }
 
-    final rates = await FxService.loadRates(trip.currency);
-    double sumBase = 0.0;
+    // Raw per-currency buckets
+    final raw = <String, double>{};
     for (final e in items) {
-      final from = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
-      sumBase += FxService.convert(
-        amount: e.amount,
+      final c = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
+      raw[c] = (raw[c] ?? 0) + e.amount;
+    }
+
+    // ONE FX table → sum to trip currency
+    final rates = await FxService.loadRates(trip.currency);
+    double total = 0.0;
+    raw.forEach((from, amt) {
+      total += FxService.convert(
+        amount: amt,
         from: from,
         to: trip.currency,
         ratesForBaseTo: rates,
       );
-    }
+    });
 
     if (!mounted) return;
     setState(() {
-      _fltByCcy = byCcy;
-      _fltApproxBase = sumBase;
+      _filteredByCcy = raw;
+      _filteredTotalBase = total;
     });
   }
 
@@ -222,9 +231,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
           // apply filters
           final expenses = _applyFilters(_all);
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            _recomputeFilteredTotals(expenses);
-          });
+          _recalcFilteredTotals(expenses);
 
           // --- FILTER BAR ---
           final cats = _categoriesOf(_all).toList()..sort();
@@ -331,23 +338,31 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               const SizedBox(height: 8),
 
               // Filtered totals
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(12),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text('Filtered totals', style: Theme.of(context).textTheme.titleSmall),
-                      const SizedBox(height: 6),
-                      ..._fltByCcy.entries.map((e) => Text(
-                            '${e.value.toStringAsFixed(2)} ${e.key}',
-                          )),
-                      if (_trip != null)
-                        Text('≈ ${_fltApproxBase.toStringAsFixed(2)} ${_trip!.currency}'),
-                    ],
+              if (expenses.isNotEmpty)
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Builder(builder: (_) {
+                      final trip = TripStorageService.loadLightweight();
+                      final base = trip?.currency ?? 'EUR';
+                      final lines = <Widget>[
+                        Text('Filtered totals',
+                            style: Theme.of(context).textTheme.titleMedium),
+                        const SizedBox(height: 8),
+                        ..._filteredByCcy.entries
+                            .map((e) => Text(
+                                '${e.value.toStringAsFixed(2)} ${e.key}')),
+                        const SizedBox(height: 4),
+                        Text('≈ ${_filteredTotalBase.toStringAsFixed(2)} $base',
+                            style: Theme.of(context).textTheme.bodySmall),
+                      ];
+                      return Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: lines,
+                      );
+                    }),
                   ),
                 ),
-              ),
             ],
           );
 
