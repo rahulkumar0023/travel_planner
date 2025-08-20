@@ -9,6 +9,7 @@ import 'budgets_screen.dart';
 import 'dashboard_screen.dart';
 import 'expenses_screen.dart';
 import 'trip_selection_screen.dart';
+import 'monthly_budget_screen.dart'; // 👈 NEW
 // app_shell imports patch end
 
 
@@ -86,6 +87,7 @@ class _AppShellState extends State<AppShell> {
       ),
       ExpensesScreen(api: widget.api),
       BudgetsScreen(api: widget.api),
+      MonthlyBudgetScreen(api: widget.api), // 👈 NEW: fourth tab
     ];
 
     return Scaffold(
@@ -97,6 +99,7 @@ class _AppShellState extends State<AppShell> {
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Expenses'),
           NavigationDestination(icon: Icon(Icons.savings_outlined), label: 'Budgets'),
+          NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Monthly'), // 👈 NEW
         ],
       ),
     );

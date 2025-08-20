@@ -10,6 +10,10 @@ import '../models/trip.dart';
 import 'local_budget_store.dart';
 import 'dart:async';
 import 'local_trip_store.dart';
+import 'package:collection/collection.dart';
+import '../models/monthly.dart';
+import 'trip_storage_service.dart';
+import 'fx_service.dart';
 
 class _FxCache {
   _FxCache(this.rate, this.ts);
@@ -626,4 +630,148 @@ class ApiService {
     }
   }
   // unlink trip budget end
+
+  // Monthly (front-end compute) start
+  // 👇 NEW: client-side “API” to power Monthly screen until backend endpoints exist.
+
+  /// Get Monthly summary for a given month (year+month used)
+  Future<MonthlyBudgetSummary> fetchMonthlySummary(DateTime month) async {
+    // Normalize to first-of-month
+    final m = DateTime(month.year, month.month);
+
+    // 1) Load budgets + trips (server first → local cache fallback is inside these)
+    final budgets = await fetchBudgetsOrCache();
+    final trips = await fetchTripsOrCache();
+
+    // 2) Select monthly budgets for this period
+    final monthly = budgets.where((b) =>
+        b.kind == BudgetKind.monthly &&
+        (b.year == m.year) &&
+        (b.month == m.month)).toList();
+
+    if (monthly.isEmpty) {
+      // No monthly budget yet — default to home currency, zeroed state
+      final home = TripStorageService.getHomeCurrency();
+      return MonthlyBudgetSummary(
+        currency: home,
+        totalBudgeted: 0,
+        totalSpent: 0,
+        remaining: 0,
+        pctSpent: 0,
+      );
+    }
+
+    // Assume a single “primary” monthly for this period. If many exist, pick the first.
+    final primary = monthly.first;
+    final monthCcy = primary.currency;
+
+    // 3) Sum total budgeted (if multiple monthly budgets exist, sum them all, same ccy expected)
+    final totalBudgeted = monthly.fold<double>(0.0, (p, b) => p + b.amount);
+
+    // 4) Find all trip budgets linked to any monthly in this period
+    final linkedTripBudgetIds = monthly.map((m) => m.id).toSet();
+    final tripsForMonth = budgets
+        .where((b) =>
+            b.kind == BudgetKind.trip &&
+            b.linkedMonthlyBudgetId != null &&
+            linkedTripBudgetIds.contains(b.linkedMonthlyBudgetId))
+        .toList();
+
+    // 5) For each linked trip, fetch its expenses, FX → monthly currency, and sum
+    double totalSpent = 0.0;
+    for (final tb in tripsForMonth) {
+      if (tb.tripId == null || tb.tripId!.isEmpty) continue;
+      final exps = await fetchExpenses(tb.tripId!);
+      // Optionally, filter to expenses that fall within this calendar month:
+      final expsThisMonth = exps.where((e) =>
+          e.date.year == m.year && e.date.month == m.month);
+
+      // Sum in monthly currency
+      for (final e in expsThisMonth) {
+        final from = (e.currency.isEmpty) ? tb.currency : e.currency;
+        final v = await convert(amount: e.amount, from: from, to: monthCcy);
+        totalSpent += v;
+      }
+    }
+
+    final remaining = (totalBudgeted - totalSpent);
+    final pctSpent = (totalBudgeted > 0)
+        ? (totalSpent / totalBudgeted).clamp(0.0, 1.0)
+        : 0.0;
+
+    return MonthlyBudgetSummary(
+      currency: monthCcy,
+      totalBudgeted: totalBudgeted,
+      totalSpent: totalSpent,
+      remaining: remaining < 0 ? 0 : remaining,
+      pctSpent: pctSpent,
+    );
+  }
+
+  /// Produce the envelope rows for the month. For now, each linked Trip budget is an “envelope”.
+  /// Later, you can group Trip budgets by category and add children (subcategories).
+  Future<List<MonthlyEnvelope>> fetchMonthlyEnvelopes(DateTime month) async {
+    final m = DateTime(month.year, month.month);
+
+    final budgets = await fetchBudgetsOrCache();
+    final monthly = budgets.where((b) =>
+        b.kind == BudgetKind.monthly &&
+        (b.year == m.year) &&
+        (b.month == m.month)).toList();
+
+    if (monthly.isEmpty) return <MonthlyEnvelope>[];
+
+    final monthCcy = monthly.first.currency;
+    final linkedIds = monthly.map((m) => m.id).toSet();
+
+    // Trip budgets linked to this month become “envelopes”
+    final tripBudgets = budgets.where((b) =>
+        b.kind == BudgetKind.trip &&
+        b.linkedMonthlyBudgetId != null &&
+        linkedIds.contains(b.linkedMonthlyBudgetId)).toList();
+
+    final List<MonthlyEnvelope> rows = [];
+    var colorIndex = 0;
+
+    for (final tb in tripBudgets) {
+      // Sum spent for this trip within the month, in monthly currency
+      double spent = 0.0;
+      if (tb.tripId != null && tb.tripId!.isNotEmpty) {
+        final exps = await fetchExpenses(tb.tripId!);
+        final expsThisMonth = exps.where((e) =>
+            e.date.year == m.year && e.date.month == m.month);
+        for (final e in expsThisMonth) {
+          final from = (e.currency.isEmpty) ? tb.currency : e.currency;
+          spent += await convert(amount: e.amount, from: from, to: monthCcy);
+        }
+      }
+
+      // Planned must be in monthly currency (convert if trip budget ccy differs)
+      final planned = await convert(amount: tb.amount, from: tb.currency, to: monthCcy);
+
+      rows.add(MonthlyEnvelope(
+        id: tb.id,
+        name: tb.name ?? 'Trip',
+        currency: monthCcy,
+        planned: planned,
+        spent: spent,
+        colorIndex: colorIndex++,
+        children: const <MonthlyEnvelope>[],
+      ));
+    }
+
+    // OPTIONAL: Example of adding a top-level “Income: Salary” envelope with a subcategory
+    // rows.insert(0, MonthlyEnvelope(
+    //   id: 'inc_salary',
+    //   name: 'Income: Salary',
+    //   currency: monthCcy,
+    //   planned: 0,
+    //   spent: 0,
+    //   colorIndex: 0,
+    //   children: const <MonthlyEnvelope>[],
+    // ));
+
+    return rows;
+  }
+  // Monthly (front-end compute) end
 }
