@@ -258,6 +258,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
 
     // 4) Daily burn / days left
+    // daysSoFar = max(1, today - startDate + 1)
+    // dailyBurn = spentInTripCurrency / daysSoFar
+    // remaining = max(0, budget - spentInTripCurrency)
+    // days left = ceil(remaining / dailyBurn) (burn == 0 -> 0)
     final daysSoFar = (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
     final burn = totalBase / daysSoFar;
     int? daysLeft;
