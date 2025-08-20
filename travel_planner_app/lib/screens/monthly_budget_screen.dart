@@ -6,6 +6,8 @@ import '../services/envelope_store.dart';
 import '../services/envelope_links_store.dart';
 import '../models/envelope.dart';
 import '../models/budget.dart';
+// 👇 NEW
+import 'category_manager_screen.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
   final ApiService api;
@@ -236,6 +238,16 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
         ),
         actions: [
           IconButton(onPressed: () { _reload(); }, icon: const Icon(Icons.refresh)),
+          IconButton(
+            icon: const Icon(Icons.category_outlined),
+            tooltip: 'Manage categories',
+            onPressed: () async {
+              await Navigator.push(context, MaterialPageRoute(builder: (_) => const CategoryManagerScreen()));
+              if (!mounted) return;
+              // Optionally: refresh monthly data if you later aggregate by category.
+              setState(() { /* keep as-is; your _load() already refreshes on pull */ });
+            },
+          ),
         ],
         centerTitle: true,
       ),

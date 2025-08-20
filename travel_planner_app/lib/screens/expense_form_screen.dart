@@ -9,6 +9,9 @@ import '../services/trip_storage_service.dart';
 import '../models/currencies.dart';
 // 👇 NEW: remember last-used currency per trip
 import '../services/last_used_store.dart';
+// 👇 NEW: categories store + model
+import '../models/category.dart';
+import '../services/category_store.dart';
 
 class ExpenseFormScreen extends StatefulWidget {
   const ExpenseFormScreen({
@@ -47,9 +50,14 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
   final _title = TextEditingController();
   final _amount = TextEditingController();
   late List<String> _participants; // safe list used across the form
-  String _category = 'Food';
   late String _paidBy;
   late Set<String> _shared;
+  // 👇 NEW: category state
+  CategoryType _type = CategoryType.expense; // we tag expenses for now
+  List<CategoryItem> _roots = [];
+  List<CategoryItem> _subs = [];
+  String? _selectedRootId;
+  String? _selectedSubId;
 
 // expense form initState fix start
   @override
@@ -82,6 +90,22 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
 
     _expenseCurrency = initial;
     _loadSavedCurrency(); // 👈 NEW: apply last-used if available
+
+    // 👇 NEW: load categories for EXPENSE by default
+    () async {
+      final roots = await CategoryStore.roots(CategoryType.expense);
+      if (!mounted) return;
+      setState(() {
+        _type = CategoryType.expense;
+        _roots = roots;
+        _selectedRootId = roots.isNotEmpty ? roots.first.id : null;
+      });
+      if (_selectedRootId != null) {
+        final subs = await CategoryStore.subsOf(_selectedRootId!);
+        if (!mounted) return;
+        setState(() => _subs = subs);
+      }
+    }();
   }
 // expense form initState fix end
 
@@ -96,6 +120,20 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     }
   }
 // _loadSavedCurrency method end
+
+  // 👇 NEW: when root changes, refresh subs
+  Future<void> _onRootChanged(String? id) async {
+    setState(() {
+      _selectedRootId = id;
+      _subs = [];
+      _selectedSubId = null;
+    });
+    if (id != null) {
+      final subs = await CategoryStore.subsOf(id);
+      if (!mounted) return;
+      setState(() => _subs = subs);
+    }
+  }
 
 
   Future<void> _pickReceipt(ImageSource src) async {
@@ -124,10 +162,19 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
     final title = _title.text.trim();
     final amount = double.tryParse(_amount.text.trim()) ?? 0;
     if (title.isEmpty || amount <= 0 || _shared.isEmpty) return;
+    // 👇 NEW: compose `Parent > Sub` (or just Parent)
+    final rootName = _roots.firstWhere(
+      (c) => c.id == _selectedRootId,
+      orElse: () => CategoryItem(id: 'misc', name: 'Misc', type: CategoryType.expense),
+    ).name;
+    final subName = (_selectedSubId == null)
+        ? null
+        : _subs.firstWhere((s) => s.id == _selectedSubId, orElse: () => _subs.first).name;
+
     widget.onSubmit(
       title: title,
       amount: amount,
-      category: _category,
+      category: subName == null ? rootName : '$rootName > $subName', // 👈 NEW
       paidBy: _paidBy,
       sharedWith: _shared.toList(),
       currency: _expenseCurrency, // <-- pass the chosen currency
@@ -162,14 +209,26 @@ class _ExpenseFormScreenState extends State<ExpenseFormScreen> {
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
           ),
           const SizedBox(height: 8),
+          // Category pickers start
           DropdownButtonFormField<String>(
-            value: _category,
-            items: const ['Food', 'Transport', 'Lodging', 'Activity', 'Other']
-                .map((c) => DropdownMenuItem(value: c, child: Text(c)))
-                .toList(),
-            onChanged: (v) => setState(() => _category = v ?? 'Food'),
+            value: _selectedRootId,
             decoration: const InputDecoration(labelText: 'Category'),
+            onChanged: (v) => _onRootChanged(v),
+            items: _roots
+                .map((c) => DropdownMenuItem(value: c.id, child: Text(c.name)))
+                .toList(),
           ),
+          const SizedBox(height: 8),
+          DropdownButtonFormField<String>(
+            value: _selectedSubId,
+            decoration: const InputDecoration(labelText: 'Subcategory (optional)'),
+            onChanged: (v) => setState(() => _selectedSubId = v),
+            items: [
+              const DropdownMenuItem(value: null, child: Text('— None —')),
+              ..._subs.map((s) => DropdownMenuItem(value: s.id, child: Text(s.name))),
+            ],
+          ),
+          // Category pickers end
           const SizedBox(height: 8),
           // paid-by items from _participants start
           DropdownButtonFormField<String>(
