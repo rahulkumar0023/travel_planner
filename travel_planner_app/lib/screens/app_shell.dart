@@ -99,7 +99,7 @@ class _AppShellState extends State<AppShell> {
           NavigationDestination(icon: Icon(Icons.dashboard_outlined), label: 'Home'),
           NavigationDestination(icon: Icon(Icons.receipt_long_outlined), label: 'Expenses'),
           NavigationDestination(icon: Icon(Icons.savings_outlined), label: 'Budgets'),
-          NavigationDestination(icon: Icon(Icons.pie_chart_outline), label: 'Monthly'), // 👈 NEW
+          NavigationDestination(icon: Icon(Icons.calendar_month_outlined), label: 'Monthly'), // 👈 NEW
         ],
       ),
     );
