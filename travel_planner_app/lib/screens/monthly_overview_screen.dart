@@ -83,6 +83,13 @@ class _MonthlyOverviewScreenState extends State<MonthlyOverviewScreen> {
     );
   }
 
+  Future<void> _reload() async {
+    final fut = _load();
+    if (!mounted) return;
+    setState(() => _future = fut);
+    await fut;
+  }
+
   bool _sameMonth(DateTime d, DateTime m) =>
       d.year == m.year && d.month == m.month;
 
@@ -112,8 +119,8 @@ class _MonthlyOverviewScreenState extends State<MonthlyOverviewScreen> {
     if (picked != null) {
       setState(() {
         _month = picked;
-        _future = _load();
       });
+      await _reload();
     }
   }
 
@@ -132,10 +139,7 @@ class _MonthlyOverviewScreenState extends State<MonthlyOverviewScreen> {
         ),
       ),
       body: RefreshIndicator(
-        onRefresh: () async {
-          setState(() => _future = _load());
-          await _future;
-        },
+        onRefresh: _reload,
         child: FutureBuilder<_MonthlyData>(
           future: _future,
           builder: (context, snap) {

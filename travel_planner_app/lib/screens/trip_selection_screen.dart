@@ -41,10 +41,11 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
 // _refresh method start
   Future<void> _refresh() async {
     if (!mounted) return;
+    final fut = widget.api.fetchTripsOrCache();
     setState(() {
-      _future = widget.api.fetchTripsOrCache();
+      _future = fut;
     });
-    await _future; // no setState AFTER this await
+    await fut; // no setState AFTER this await
     _archived = await ArchivedTripsStore.all();
   }
 // _refresh method end
@@ -187,9 +188,8 @@ Future<void> _ensureTripBudgetForTrip({
 
       await TripStorageService.save(saved);
       if (mounted) {
-        setState(() {
-          _future = widget.api.fetchTripsOrCache(); // refresh list after creation
-        });
+        await _refresh(); // refresh list after creation
+        if (!mounted) return;
         Navigator.of(context).pop<Trip>(saved);
       }
     }
@@ -270,10 +270,7 @@ Future<void> _ensureTripBudgetForTrip({
                         trailing: PopupMenuButton<String>(
                           onSelected: (v) async {
                             if (v == 'edit') {
-                              if (!mounted) return;
-                              setState(() {
-                                _future = widget.api.fetchTripsOrCache();
-                              });
+                              // no-op for now; fall through to refresh
                             } else if (v == 'delete') {
                               try {
                                 await widget.api.deleteTrip(t.id);
@@ -331,7 +328,7 @@ Future<void> _ensureTripBudgetForTrip({
                                   const SnackBar(content: Text('Trip restored')));
                             }
                             if (mounted) {
-                              setState(() { _future = widget.api.fetchTripsOrCache(); });
+                              await _refresh();
                             }
                           },
                           itemBuilder: (_) => [
