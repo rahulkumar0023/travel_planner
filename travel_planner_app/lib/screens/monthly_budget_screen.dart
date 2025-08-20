@@ -27,8 +27,11 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     _future = _svc.load(_month);
   }
 
-  void _reload() {
-    setState(() => _future = _svc.load(_month));
+  Future<void> _reload() async {
+    final fut = _svc.load(_month);
+    if (!mounted) return;
+    setState(() => _future = fut);
+    await fut;
   }
 
   Future<void> _pickMonth() async {
@@ -54,8 +57,8 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     if (picked != null) {
       setState(() {
         _month = DateTime(picked.year, picked.month, 1);
-        _future = _svc.load(_month);
       });
+      await _reload();
     }
   }
 
@@ -116,7 +119,7 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
       parentId: parentId,
     );
     await EnvelopeStore.upsert(_month, env);
-    _reload();
+    await _reload();
   }
 
   Future<void> _editEnvelope(EnvelopeDef def) async {
@@ -164,7 +167,7 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
       type: def.parentId == null ? type : EnvelopeType.expense,
       planned: double.tryParse(planned.text.trim()) ?? def.planned,
     ));
-    _reload();
+    await _reload();
   }
 
   Future<void> _deleteEnvelope(EnvelopeDef def) async {
@@ -184,7 +187,7 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     final list = await EnvelopeStore.load(_month);
     final next = list.where((e) => e.id != def.id && e.parentId != def.id).toList();
     await EnvelopeStore.save(_month, next);
-    _reload();
+    await _reload();
   }
 
   Future<void> _linkTripBudgetToEnvelope(EnvelopeDef env) async {
@@ -215,7 +218,7 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     );
     if (picked == null) return;
     await EnvelopeLinksStore.setLink(_month, tripBudgetId: picked.id, envelopeId: env.id);
-    _reload();
+    await _reload();
   }
 
   @override
@@ -232,7 +235,7 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
           ]),
         ),
         actions: [
-          IconButton(onPressed: _reload, icon: const Icon(Icons.refresh)),
+          IconButton(onPressed: () { _reload(); }, icon: const Icon(Icons.refresh)),
         ],
         centerTitle: true,
       ),
