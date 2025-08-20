@@ -6,6 +6,7 @@ import '../models/budget.dart';
 import '../services/budgets_sync.dart';
 import '../services/archived_trips_store.dart';
 import '../services/outbox_service.dart';
+import 'monthly_envelopes_screen.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -571,6 +572,15 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
             },
           ),
           IconButton(icon: const Icon(Icons.refresh), onPressed: _refresh),
+          IconButton(
+            tooltip: 'Monthly envelopes',
+            icon: const Icon(Icons.view_week_outlined),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => MonthlyEnvelopesScreen(api: widget.api)),
+              );
+            },
+          ),
           const SizedBox(width: 4),
         ],
       ),
