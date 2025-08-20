@@ -1,340 +1,59 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
-import '../models/monthly_category.dart';
-import '../services/monthly_store.dart';
-import '../services/monthly_calc.dart';
+import '../models/monthly.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
   final ApiService api;
   const MonthlyBudgetScreen({super.key, required this.api});
+
   @override
   State<MonthlyBudgetScreen> createState() => _MonthlyBudgetScreenState();
 }
 
-class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen>
-    with TickerProviderStateMixin {
+class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
-  late Future<List<MonthlyCategory>> _envFut;
-  String _ccy = 'EUR'; // monthly base currency (can add a setting later)
-  late final TabController _tabs;
+  late Future<List<dynamic>> _future; // [summary, envelopes]
 
   @override
   void initState() {
     super.initState();
-    _tabs = TabController(length: 2, vsync: this);
-    _load();
+    _future = _load();
   }
 
-  void _load() {
-    _envFut = MonthlyStore.load(_month);
+  Future<List<dynamic>> _load() async {
+    final summary = await widget.api.fetchMonthlySummary(_month);
+    final envs = await widget.api.fetchMonthlyEnvelopes(_month);
+    return [summary, envs];
   }
 
   Future<void> _pickMonth() async {
-    final now = DateTime.now();
-    final months = List.generate(15, (i) {
-      final d = DateTime(now.year, now.month - 7 + i);
+    final base = DateTime(_month.year, _month.month);
+    final options = List.generate(13, (i) {
+      final d = DateTime(base.year, base.month - 6 + i);
       return DateTime(d.year, d.month);
     });
     final picked = await showModalBottomSheet<DateTime>(
       context: context,
       showDragHandle: true,
       builder: (ctx) => ListView(
-        children: months
-            .map((m) => ListTile(
-                  title: Text('${_m(m.month)} ${m.year}'),
-                  onTap: () => Navigator.pop(ctx, m),
-                ))
-            .toList(),
-      ),
-    );
-    if (picked != null) setState(() {
-      _month = picked;
-      _load();
-    });
-  }
-
-  // Add/Edit dialogs
-  Future<void> _addCategory(MonthlyKind kind) async {
-    final name = TextEditingController();
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('New ${kind == MonthlyKind.income ? "Income" : "Expense"} Category'),
-        content: TextField(
-            controller: name, decoration: const InputDecoration(labelText: 'Name')),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Create')),
-        ],
-      ),
-    );
-    if (ok != true || name.text.trim().isEmpty) return;
-    final list = await _envFut;
-    final next = [
-      ...list,
-      MonthlyCategory(
-        id: 'cat_${DateTime.now().millisecondsSinceEpoch}',
-        kind: kind,
-        name: name.text.trim(),
-        currency: _ccy,
-        subs: const [],
-      ),
-    ];
-    await MonthlyStore.save(_month, next);
-    if (mounted) setState(_load);
-  }
-
-  Future<void> _addSub(MonthlyCategory cat) async {
-    final name = TextEditingController();
-    final planned = TextEditingController(text: '0');
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Add subcategory to ${cat.name}'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-              controller: name, decoration: const InputDecoration(labelText: 'Name')),
-          const SizedBox(height: 8),
-          TextField(
-              controller: planned,
-              decoration: const InputDecoration(labelText: 'Planned'),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true)),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Add')),
-        ],
-      ),
-    );
-    if (ok != true || name.text.trim().isEmpty) return;
-    final list = await _envFut;
-    final idx = list.indexWhere((c) => c.id == cat.id);
-    if (idx < 0) return;
-    final sub = MonthlySubcategory(
-      id: 'sub_${DateTime.now().millisecondsSinceEpoch}',
-      name: name.text.trim(),
-      planned: double.tryParse(planned.text.trim()) ?? 0,
-    );
-    final updated = list[idx].copyWith(subs: [...list[idx].subs, sub]);
-    final next = [...list]..[idx] = updated;
-    await MonthlyStore.save(_month, next);
-    if (mounted) setState(_load);
-  }
-
-  Future<void> _editSub(MonthlyCategory cat, MonthlySubcategory sub) async {
-    final name = TextEditingController(text: sub.name);
-    final planned = TextEditingController(text: sub.planned.toString());
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text('Edit ${cat.name} ▸ ${sub.name}'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(
-              controller: name, decoration: const InputDecoration(labelText: 'Name')),
-          const SizedBox(height: 8),
-          TextField(
-              controller: planned,
-              decoration: const InputDecoration(labelText: 'Planned'),
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true)),
-        ]),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('Cancel')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: const Text('Save')),
-        ],
-      ),
-    );
-    if (ok != true) return;
-    final list = await _envFut;
-    final ci = list.indexWhere((c) => c.id == cat.id);
-    if (ci < 0) return;
-    final si = list[ci].subs.indexWhere((s) => s.id == sub.id);
-    if (si < 0) return;
-    final updSub = sub.copyWith(
-      name: name.text.trim().isEmpty ? sub.name : name.text.trim(),
-      planned: double.tryParse(planned.text.trim()) ?? sub.planned,
-    );
-    final nextSubs = [...list[ci].subs]..[si] = updSub;
-    final updCat = list[ci].copyWith(subs: nextSubs);
-    final next = [...list]..[ci] = updCat;
-    await MonthlyStore.save(_month, next);
-    if (mounted) setState(_load);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: InkWell(
-          onTap: _pickMonth,
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Text('${_m(_month.month)} ${_month.year}'),
-            const SizedBox(width: 6),
-            const Icon(Icons.expand_more, size: 18),
-          ]),
-        ),
-        bottom: TabBar(
-          controller: _tabs,
-          tabs: const [Tab(text: 'Overview'), Tab(text: 'Categories')],
-        ),
-      ),
-      floatingActionButton: _tabs.index == 1
-          ? Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                FloatingActionButton.extended(
-                  heroTag: 'fab-income',
-                  onPressed: () => _addCategory(MonthlyKind.income),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add Income'),
-                ),
-                const SizedBox(height: 10),
-                FloatingActionButton.extended(
-                  heroTag: 'fab-expense',
-                  onPressed: () => _addCategory(MonthlyKind.expense),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Add Expense'),
-                ),
-              ],
+        children: [
+          for (final d in options)
+            ListTile(
+              title: Text('${_mmm(d.month)} ${d.year}'),
+              onTap: () => Navigator.pop(ctx, d),
             )
-          : null,
-      body: FutureBuilder<List<MonthlyCategory>>(
-        future: _envFut,
-        builder: (context, snap) {
-          if (!snap.hasData) {
-            return const Center(child: CircularProgressIndicator());
-          }
-          final envs = snap.data!;
-          return TabBarView(
-            controller: _tabs,
-            children: [
-              _overview(envs),
-              _categories(envs),
-            ],
-          );
-        },
+        ],
       ),
     );
+    if (picked != null) {
+      setState(() {
+        _month = picked;
+        _future = _load();
+      });
+    }
   }
 
-  Widget _overview(List<MonthlyCategory> envs) {
-    return FutureBuilder<MonthlyTotals>(
-      future: computeTotals(
-          month: _month,
-          envelopes: envs,
-          monthlyCurrency: _ccy,
-          api: widget.api),
-      builder: (context, s) {
-        if (!s.hasData) return const Center(child: CircularProgressIndicator());
-        final t = s.data!;
-        final left = (t.planned - t.spent);
-        final pctSpent = (t.planned <= 0) ? 0 : (t.spent / t.planned).clamp(0, 1.0);
-        return ListView(
-          padding: const EdgeInsets.all(16),
-          children: [
-            _OverviewCard(
-              leftOver: left,
-              pctSpent: pctSpent,
-              totalBudgeted: t.planned,
-              remaining: left < 0 ? 0 : left,
-              currency: t.currency,
-            ),
-            const SizedBox(height: 12),
-            Text('Quick month picker',
-                style: Theme.of(context).textTheme.titleMedium),
-            const SizedBox(height: 6),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: List.generate(6, (i) {
-                final d = DateTime(_month.year, _month.month - 2 + i);
-                return ActionChip(
-                  label: Text('${_m(d.month)} ${d.year}'),
-                  onPressed: () => setState(() {
-                    _month = DateTime(d.year, d.month);
-                    _load();
-                  }),
-                );
-              }),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
-  Widget _categories(List<MonthlyCategory> envs) {
-    final income = envs.where((c) => c.kind == MonthlyKind.income).toList();
-    final expense = envs.where((c) => c.kind == MonthlyKind.expense).toList();
-    return ListView(
-      padding: const EdgeInsets.only(bottom: 120),
-      children: [
-        const SizedBox(height: 8),
-        _section('Income', income, allowAddSub: true),
-        const SizedBox(height: 12),
-        _section('Expenses', expense, allowAddSub: true),
-      ],
-    );
-  }
-
-  Widget _section(String title, List<MonthlyCategory> cats,
-      {required bool allowAddSub}) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(4, 8, 4, 6),
-          child: Text(title, style: Theme.of(context).textTheme.titleMedium),
-        ),
-        ...cats.map((c) {
-          final planned = c.subs.fold<double>(0, (p, s) => p + s.planned);
-          return Card(
-            child: ExpansionTile(
-              title: Text('${c.name} • Planned ${planned.toStringAsFixed(2)} ${c.currency}'),
-              children: [
-                for (final s in c.subs)
-                  ListTile(
-                    title: Text(s.name),
-                    subtitle: const LinearProgressIndicator(
-                      value: 0, // (wire a per-sub spent if you want later)
-                      minHeight: 8,
-                    ),
-                    trailing:
-                        Text('${s.planned.toStringAsFixed(2)} ${c.currency}'),
-                    onTap: () => _editSub(c, s),
-                  ),
-                if (allowAddSub)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () => _addSub(c),
-                      icon: const Icon(Icons.add),
-                      label: const Text('Add subcategory'),
-                    ),
-                  ),
-              ],
-            ),
-          );
-        }),
-      ]),
-    );
-  }
-
-  String _m(int m) =>
-      const [
+  String _mmm(int m) => const [
         'Jan',
         'Feb',
         'Mar',
@@ -348,27 +67,216 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen>
         'Nov',
         'Dec'
       ][m - 1];
-}
-
-class _OverviewCard extends StatelessWidget {
-  final double leftOver;
-  final double pctSpent; // 0..1
-  final double totalBudgeted;
-  final double remaining;
-  final String currency;
-  const _OverviewCard({
-    required this.leftOver,
-    required this.pctSpent,
-    required this.totalBudgeted,
-    required this.remaining,
-    required this.currency,
-  });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(
+        title: InkWell(
+          onTap: _pickMonth,
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            Text('${_mmm(_month.month)} ${_month.year}'),
+            const SizedBox(width: 6),
+            const Icon(Icons.expand_more, size: 18),
+          ]),
+        ),
+      ),
+      body: RefreshIndicator(
+        onRefresh: () async {
+          setState(() => _future = _load());
+          await _future;
+        },
+        child: FutureBuilder<List<dynamic>>(
+          future: _future,
+          builder: (context, snap) {
+            if (snap.connectionState == ConnectionState.waiting) {
+              return const Center(child: CircularProgressIndicator());
+            }
+            if (snap.hasError) {
+              return ListView(children: [
+                const SizedBox(height: 100),
+                Center(
+                    child: Text('Could not load monthly view:\n${snap.error}')),
+              ]);
+            }
+
+            final summary =
+                (snap.data as List)[0] as MonthlyBudgetSummary;
+            final budgets =
+                (snap.data as List)[1] as List<MonthlyEnvelope>;
+            final leftOver = summary.remaining;
+            final pct = summary.pctSpent;
+
+            return ListView(
+              padding: const EdgeInsets.only(bottom: 100),
+              children: [
+                // Overview Card
+                Container(
+                  margin: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                  padding: const EdgeInsets.all(16),
+                  decoration: BoxDecoration(
+                    color: Theme.of(context).cardColor,
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: cs.outlineVariant),
+                  ),
+                  child: Column(
+                    children: [
+                      Row(
+                        children: [
+                          _Ring(value: pct),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Left Over',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelLarge),
+                                const SizedBox(height: 4),
+                                Text(
+                                  leftOver.toStringAsFixed(2),
+                                  style: Theme.of(context)
+                                      .textTheme
+                                      .headlineSmall!
+                                      .copyWith(
+                                          fontWeight: FontWeight.w800),
+                                ),
+                                const SizedBox(height: 8),
+                                Text(
+                                    '${(pct * 100).toStringAsFixed(2)}% of income spent',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .labelMedium!
+                                        .copyWith(
+                                            color: cs.secondary)),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(8),
+                        child: LinearProgressIndicator(
+                          value: pct,
+                          minHeight: 10,
+                          backgroundColor: cs.surfaceVariant,
+                          color: cs.primary,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      _OverviewStats(
+                        totalBudgeted: summary.totalBudgeted,
+                        totalSpent: summary.totalSpent,
+                        leftOver: leftOver,
+                      ),
+                    ],
+                  ),
+                ),
+
+                // Envelope rows
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 6),
+                  child: Text('Categories',
+                      style: Theme.of(context)
+                          .textTheme
+                          .titleMedium!
+                          .copyWith(fontWeight: FontWeight.w800)),
+                ),
+                const SizedBox(height: 4),
+                ...budgets.map((b) => _BudgetRow(budget: b)).toList(),
+                const SizedBox(height: 16),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+  }
+}
+
+class _OverviewStats extends StatelessWidget {
+  final double totalBudgeted;
+  final double totalSpent;
+  final double leftOver;
+  const _OverviewStats(
+      {required this.totalBudgeted,
+      required this.totalSpent,
+      required this.leftOver});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    Widget stat(String label, double amount, Color color) {
+      return Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(label,
+                style: Theme.of(context)
+                    .textTheme
+                    .labelMedium!
+                    .copyWith(color: cs.secondary)),
+            const SizedBox(height: 4),
+            Text(amount.toStringAsFixed(2),
+                style: Theme.of(context).textTheme.titleMedium),
+          ],
+        ),
+      );
+    }
+
+    return Row(
+      children: [
+        stat('Planned', totalBudgeted, cs.primary),
+        stat('Spent', totalSpent, cs.tertiary),
+        stat('Left', leftOver, cs.primary),
+      ],
+    );
+  }
+}
+
+class _Ring extends StatelessWidget {
+  final double value;
+  const _Ring({required this.value});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 60,
+      height: 60,
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          CircularProgressIndicator(
+            value: value,
+            strokeWidth: 6,
+            backgroundColor: cs.surfaceVariant,
+            color: cs.primary,
+          ),
+          Center(
+              child: Text('${(value * 100).toStringAsFixed(0)}%',
+                  style: Theme.of(context).textTheme.labelMedium)),
+        ],
+      ),
+    );
+  }
+}
+
+class _BudgetRow extends StatelessWidget {
+  final MonthlyEnvelope budget;
+  const _BudgetRow({required this.budget});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final remaining =
+        (budget.planned - budget.spent).clamp(0.0, double.infinity);
     return Container(
-      padding: const EdgeInsets.all(16),
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+      padding: const EdgeInsets.all(14),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
         borderRadius: BorderRadius.circular(16),
@@ -377,33 +285,41 @@ class _OverviewCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Left Over', style: Theme.of(context).textTheme.labelLarge),
-          const SizedBox(height: 6),
-          Text(
-            '${leftOver.toStringAsFixed(2)} $currency',
-            style: Theme.of(context)
-                .textTheme
-                .headlineSmall!
-                .copyWith(fontWeight: FontWeight.w800),
-          ),
-          const SizedBox(height: 12),
-          LinearProgressIndicator(
-            value: pctSpent,
-            minHeight: 10,
-          ),
-          const SizedBox(height: 8),
           Row(
             children: [
               Expanded(
-                  child: Text('Budget Spent ${(pctSpent * 100).toStringAsFixed(1)}%')),
-              Text('Total ${totalBudgeted.toStringAsFixed(2)} $currency'),
+                child: Text(budget.name,
+                    style: Theme.of(context).textTheme.titleMedium),
+              ),
+              const SizedBox(width: 8),
+              Text(budget.planned.toStringAsFixed(2),
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelLarge!
+                      .copyWith(fontWeight: FontWeight.bold)),
             ],
           ),
-          const Divider(height: 20),
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(4),
+            child: LinearProgressIndicator(
+              value: budget.pct,
+              minHeight: 8,
+              backgroundColor: cs.surfaceVariant,
+              color: cs.primary,
+            ),
+          ),
+          const SizedBox(height: 8),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Expanded(child: Text('Remaining to spend')),
-              Text('${remaining.toStringAsFixed(2)} $currency'),
+              Text('Spent: ${budget.spent.toStringAsFixed(2)}',
+                  style: Theme.of(context).textTheme.labelMedium),
+              Text('Left: ${remaining.toStringAsFixed(2)}',
+                  style: Theme.of(context)
+                      .textTheme
+                      .labelMedium!
+                      .copyWith(color: cs.secondary)),
             ],
           ),
         ],
