@@ -478,7 +478,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
   // --- money formatting + spent cache ---
 // money formatter (very simple; replace with intl if you want)
-  String _money(String ccy, num v) => '$ccy ${v.toStringAsFixed(0)}';
+  String _money(String ccy, num v, {int dp = 2}) => '$ccy ${v.toStringAsFixed(dp)}';
 
 // // Cache: tripId -> spent amount
 //   final Map<String, double> _spentByTrip = <String, double>{};
@@ -654,9 +654,9 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
                           return Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text('Total: ${_money(m.currency, m.amount)}'),
-                              Text('Spent: ${_money(m.currency, spent)}'),
-                              Text('Remaining: ${_money(m.currency, remaining)}'),
+                              Text('Total: ${_money(m.currency, m.amount, dp: 2)}'),
+                              Text('Spent: ${_money(m.currency, spent, dp: 2)}'),
+                              Text('Remaining: ${_money(m.currency, remaining, dp: 2)}'),
                             ],
                           );
                         },
@@ -701,9 +701,9 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
                           final lines = <Widget>[
                             // your existing totals
-                            Text('Total: ${_money(t.currency, t.amount)}'),
-                            Text('Spent: ${_money(t.currency, spent)}'),
-                            Text('Remaining: ${_money(t.currency, remaining)}'),
+                            Text('Total: ${_money(t.currency, t.amount, dp: 2)}'),
+                            Text('Spent: ${_money(t.currency, spent, dp: 2)}'),
+                            Text('Remaining: ${_money(t.currency, remaining, dp: 2)}'),
                             const SizedBox(height: 4),
                           ];
 
