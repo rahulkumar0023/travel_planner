@@ -1,46 +1,47 @@
-// monthly.dart start
-// 👇 NEW: Monthly overview + envelopes data models
 class MonthlyBudgetSummary {
-  final String currency;        // e.g., 'EUR'
-  final double totalBudgeted;   // sum of all monthly budgets (in their own ccy converted to currency)
-  final double totalSpent;      // sum of linked trip spends converted to currency
-  final double remaining;       // totalBudgeted - totalSpent
-  final double pctSpent;        // clamp 0..1
+  final String currency;
+  final double totalBudgeted;
+  final double totalSpent;
+  double get remaining => (totalBudgeted - totalSpent);
+  double get pctSpent => totalBudgeted <= 0 ? 0 : (totalSpent / totalBudgeted);
 
   const MonthlyBudgetSummary({
     required this.currency,
     required this.totalBudgeted,
     required this.totalSpent,
-    required this.remaining,
-    required this.pctSpent,
   });
+
+  factory MonthlyBudgetSummary.fromJson(Map<String, dynamic> j) => MonthlyBudgetSummary(
+    currency: (j['currency'] ?? 'EUR') as String,
+    totalBudgeted: (j['totalBudgeted'] as num).toDouble(),
+    totalSpent: (j['totalSpent'] as num).toDouble(),
+  );
 }
 
-class MonthlyEnvelope {
-  final String id;              // stable id (can reuse budget id)
-  final String name;            // e.g., 'Food' or 'Income: Salary'
-  final String currency;        // envelope currency (usually same as monthly currency)
-  final double planned;         // budgeted amount
-  final double spent;           // computed spent
-  final int colorIndex;         // for row color variation
-  final List<MonthlyEnvelope> children; // optional sub-categories
+class MonthlyCategory {
+  final String id;
+  final String name;
+  final String currency;
+  final double planned; // budgeted
+  final double spent;   // aggregated
+  final int colorIndex;
+  double get pct => planned <= 0 ? 0 : (spent / planned).clamp(0, 1);
 
-  const MonthlyEnvelope({
+  const MonthlyCategory({
     required this.id,
     required this.name,
     required this.currency,
     required this.planned,
     required this.spent,
     this.colorIndex = 0,
-    this.children = const <MonthlyEnvelope>[],
   });
 
-  double get pct {
-    if (planned <= 0) return 0;
-    final p = spent / planned;
-    if (p < 0) return 0;
-    if (p > 1.0) return 1.0;
-    return p;
-  }
+  factory MonthlyCategory.fromJson(Map<String, dynamic> j) => MonthlyCategory(
+    id: j['id'] as String,
+    name: j['name'] as String,
+    currency: (j['currency'] ?? 'EUR') as String,
+    planned: (j['planned'] as num).toDouble(),
+    spent: (j['spent'] as num).toDouble(),
+    colorIndex: (j['colorIndex'] ?? 0) as int,
+  );
 }
-// monthly.dart end
