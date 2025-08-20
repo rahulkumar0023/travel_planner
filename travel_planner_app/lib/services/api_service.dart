@@ -631,100 +631,87 @@ class ApiService {
   }
   // unlink trip budget end
 
+  // ---- Monthly helpers start ----
+  DateTime _startOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
+  DateTime _endOfMonth(DateTime d)   => DateTime(d.year, d.month + 1, 0, 23, 59, 59, 999);
 
-  // ---- Monthly endpoints (with smart fallback) ----
-  Future<MonthlyBudgetSummary> fetchMonthlySummary(DateTime month) async {
-    // Try backend first (if/when you add /monthly/summary)
-    final y = month.year;
-    final m = month.month;
-    final uri = Uri.parse('$baseUrl/monthly/summary?year=$y&month=$m');
-    try {
-      final res = await http.get(uri, headers: _headers());
-      if (res.statusCode == 200) {
-        return MonthlyBudgetSummary.fromJson(
-            jsonDecode(res.body) as Map<String, dynamic>);
-      }
-    } catch (_) {/* fall through to synth */ }
+  /// Build EnvelopeVM list for the given month from:
+  /// - Monthly budgets (kind=monthly, year/month match)
+  /// - Trip budgets (kind=trip) that link to a monthly via linkedMonthlyBudgetId
+  /// - Expenses under the linked tripIds, converted to the monthly currency and filtered to that month.
+  Future<List<EnvelopeVM>> fetchMonthlyEnvelopes(DateTime month) async {
+    final mm = _startOfMonth(month);
+    final monthlyCurrencyFallback = TripStorageService.getHomeCurrency();
+    // 1) load all budgets (server or cache)
+    final budgets = await fetchBudgetsOrCache();
+    final monthlies = budgets.where((b) =>
+      b.kind == BudgetKind.monthly &&
+      b.year == mm.year && b.month == mm.month).toList();
 
-    // ---- Fallback synthesis from budgets + expenses ----
-    // 1) find the monthly budget for y/m (if multiple, sum them)
-    final allBudgets = await fetchBudgetsOrCache();
-    final monthly = allBudgets.where((b) =>
-        b.kind == BudgetKind.monthly &&
-        (b.year == y) &&
-        (b.month == m)).toList();
+    // 2) for each monthly, find linked trip budgets
+    final List<EnvelopeVM> out = [];
+    int idx = 0;
+    for (final m in monthlies) {
+      final linkedTripBudgets = budgets.where((b) =>
+        b.kind == BudgetKind.trip && b.linkedMonthlyBudgetId == m.id).toList();
 
-    // currency: take the first monthly currency or default EUR
-    final ccy = monthly.isNotEmpty ? monthly.first.currency : 'EUR';
-    final totalBudgeted = monthly.fold<double>(0, (p, b) => p + b.amount);
+      // collect tripIds
+      final tripIds = linkedTripBudgets.map((t) => t.tripId).whereType<String>().toSet();
 
-    // 2) find all trip budgets linked to these monthly ids
-    final monthlyIds = monthly.map((b) => b.id).toSet();
-    final tripBudgets = allBudgets.where((b) =>
-        b.kind == BudgetKind.trip &&
-        b.linkedMonthlyBudgetId != null &&
-        monthlyIds.contains(b.linkedMonthlyBudgetId));
-
-    // 3) sum spent across those trips, converting to monthly currency
-    double totalSpent = 0.0;
-    for (final tb in tripBudgets) {
-      final exps = await fetchExpenses(tb.tripId!);
-      for (final e in exps) {
-        final from = (e.currency.isEmpty) ? tb.currency : e.currency;
-        final amtInMonthly = await convert(amount: e.amount, from: from, to: ccy);
-        totalSpent += amtInMonthly;
-      }
-    }
-    return MonthlyBudgetSummary(currency: ccy, totalBudgeted: totalBudgeted, totalSpent: totalSpent);
-  }
-
-  Future<List<MonthlyCategory>> fetchMonthlyBudgets(DateTime month) async {
-    // Try backend first (if/when you add /monthly/budgets)
-    final y = month.year;
-    final m = month.month;
-    final uri = Uri.parse('$baseUrl/monthly/budgets?year=$y&month=$m');
-    try {
-      final res = await http.get(uri, headers: _headers());
-      if (res.statusCode == 200) {
-        final list = (jsonDecode(res.body) as List).cast<Map<String, dynamic>>();
-        return list.map(MonthlyCategory.fromJson).toList();
-      }
-    } catch (_) {/* fall through to synth */ }
-
-    // ---- Fallback synthesis: each linked trip budget becomes a 'category' row ----
-    final allBudgets = await fetchBudgetsOrCache();
-    final monthlies = allBudgets.where((b) =>
-        b.kind == BudgetKind.monthly && b.year == y && b.month == m).toList();
-    final monthlyIds = monthlies.map((b) => b.id).toSet();
-    final ccy = monthlies.isNotEmpty ? monthlies.first.currency : 'EUR';
-
-    final tripBudgets = allBudgets.where((b) =>
-        b.kind == BudgetKind.trip &&
-        b.linkedMonthlyBudgetId != null &&
-        monthlyIds.contains(b.linkedMonthlyBudgetId)).toList();
-
-    final out = <MonthlyCategory>[];
-    for (var i = 0; i < tripBudgets.length; i++) {
-      final tb = tripBudgets[i];
-      // sum spend for this trip, converted to monthly currency
+      // 3) sum expenses for those trips within the month, convert each to monthly currency
+      final start = _startOfMonth(mm).toUtc();
+      final end   = _endOfMonth(mm).toUtc();
       double spent = 0.0;
-      final exps = await fetchExpenses(tb.tripId!);
-      for (final e in exps) {
-        final from = (e.currency.isEmpty) ? tb.currency : e.currency;
-        spent += await convert(amount: e.amount, from: from, to: ccy);
+
+      for (final tripId in tripIds) {
+        final expenses = await fetchExpenses(tripId);
+        // choose a budget currency when an expense is missing a currency
+        final defaultTripCcy = linkedTripBudgets.firstWhere((t) => t.tripId == tripId,
+                                orElse: () => linkedTripBudgets.first).currency;
+        for (final e in expenses) {
+          final dt = e.date.toUtc();
+          if (dt.isBefore(start) || dt.isAfter(end)) continue;
+          final from = (e.currency.isEmpty ? defaultTripCcy : e.currency).toUpperCase();
+          final to   = (m.currency.isEmpty ? monthlyCurrencyFallback : m.currency).toUpperCase();
+          if (from == to) {
+            spent += e.amount;
+          } else {
+            try { spent += await convert(amount: e.amount, from: from, to: to); }
+            catch (_) { spent += e.amount; } // safe fallback
+          }
+        }
       }
-      out.add(MonthlyCategory(
-        id: tb.id,
-        name: tb.name ?? 'Trip',
-        currency: ccy,
-        planned: await convert(amount: tb.amount, from: tb.currency, to: ccy),
+
+      final name = (m.name?.isNotEmpty == true)
+        ? m.name!
+        : '${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m.month ?? 0]} ${m.year ?? ''}';
+
+      out.add(EnvelopeVM(
+        id: m.id,
+        name: name,
+        currency: m.currency,
+        planned: m.amount,
         spent: spent,
-        colorIndex: i,
+        colorIndex: idx++,
       ));
     }
-
-    // (Optional) If you later add pure 'envelope' categories, append them here too.
+    // Sort by most recent/descending budgeted by default
+    out.sort((a,b) => b.planned.compareTo(a.planned));
     return out;
   }
+
+  Future<MonthlyBudgetSummary> fetchMonthlySummary(DateTime month) async {
+    final envs = await fetchMonthlyEnvelopes(month);
+    // If there are zero envelopes for the month, try best-effort currency
+    final ccy = envs.isNotEmpty ? envs.first.currency : TripStorageService.getHomeCurrency();
+    final totalPlanned = envs.fold<double>(0.0, (p, e) => p + e.planned);
+    final totalSpent   = envs.fold<double>(0.0, (p, e) => p + e.spent);
+    return MonthlyBudgetSummary(
+      currency: ccy,
+      totalBudgeted: totalPlanned,
+      totalSpent: totalSpent,
+    );
+  }
+  // ---- Monthly helpers end ----
 
 }
