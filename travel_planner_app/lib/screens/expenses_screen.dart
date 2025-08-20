@@ -30,9 +30,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   // cache last-loaded list to filter on it without refetch
   List<Expense> _all = [];
 
-  Map<String, double> _filteredByCcy = const {};
-  double _filteredTotalBase = 0.0;
-
   // convenience: detect “any filter active”
   bool get _hasFilters => _fCategory != null || _fCurrency != null || _fRange != null;
 
@@ -80,6 +77,59 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Set<String> _currenciesOf(List<Expense> list) =>
       list.map((e) => (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase())).toSet();
 
+  // --- Currency bucket + conversion helpers (filtered totals) ---
+
+  Map<String, double> _bucketByCcy(List<Expense> rows, String base) {
+    final m = <String, double>{};
+    for (final e in rows) {
+      final c = (e.currency.isEmpty ? base : e.currency).toUpperCase();
+      m[c] = (m[c] ?? 0) + e.amount;
+    }
+    return m;
+  }
+
+  /// Returns raw bucket sums, ≈ bucket sums in base, and grand total in base.
+  Future<({
+    Map<String, double> raw,
+    Map<String, double> approx,
+    double totalBase,
+  })> _computeFilteredTotals(List<Expense> rows) async {
+    final base = (_trip?.currency ?? 'EUR').toUpperCase();
+    final raw = _bucketByCcy(rows, base);
+
+    final approx = <String, double>{};
+    double total = 0.0;
+
+    Map<String, double>? rates;
+    try {
+      rates = await FxService.loadRates(base);
+    } catch (_) {}
+
+    for (final entry in raw.entries) {
+      final c = entry.key;
+      final amt = entry.value;
+      double conv;
+
+      if (c == base) {
+        conv = amt;
+      } else {
+        // Prefer server convert; fall back to local FX; last resort: identity.
+        try {
+          conv = await widget.api.convert(amount: amt, from: c, to: base);
+        } catch (_) {
+          conv = (rates != null)
+              ? FxService.convert(amount: amt, from: c, to: base, ratesForBaseTo: rates)
+              : amt;
+        }
+      }
+
+      approx[c] = conv;
+      total += conv;
+    }
+
+    return (raw: raw, approx: approx, totalBase: total);
+  }
+
   Future<double> _convertToTrip(String from, double amount) async {
     if (from.toUpperCase() == _tripCcy) return amount;
     try {
@@ -87,44 +137,6 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     } catch (_) {
       return amount; // fallback
     }
-  }
-
-  Future<void> _recalcFilteredTotals(List<Expense> items) async {
-    final trip = TripStorageService.loadLightweight();
-    if (trip == null) {
-      if (mounted) {
-        setState(() {
-          _filteredByCcy = const {};
-          _filteredTotalBase = 0.0;
-        });
-      }
-      return;
-    }
-
-    // Raw per-currency buckets
-    final raw = <String, double>{};
-    for (final e in items) {
-      final c = (e.currency.isEmpty ? trip.currency : e.currency).toUpperCase();
-      raw[c] = (raw[c] ?? 0) + e.amount;
-    }
-
-    // ONE FX table → sum to trip currency
-    final rates = await FxService.loadRates(trip.currency);
-    double total = 0.0;
-    raw.forEach((from, amt) {
-      total += FxService.convert(
-        amount: amt,
-        from: from,
-        to: trip.currency,
-        ratesForBaseTo: rates,
-      );
-    });
-
-    if (!mounted) return;
-    setState(() {
-      _filteredByCcy = raw;
-      _filteredTotalBase = total;
-    });
   }
 
   Future<void> _exportCsv(List<Expense> list) async {
@@ -230,8 +242,7 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           _all = loaded;
 
           // apply filters
-          final expenses = _applyFilters(_all);
-          _recalcFilteredTotals(expenses);
+          final filtered = _applyFilters(_all);
 
           // --- FILTER BAR ---
           final cats = _categoriesOf(_all).toList()..sort();
@@ -338,29 +349,49 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
               const SizedBox(height: 8),
 
               // Filtered totals
-              if (expenses.isNotEmpty)
+              if (filtered.isNotEmpty)
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(12),
-                    child: Builder(builder: (_) {
-                      final trip = TripStorageService.loadLightweight();
-                      final base = trip?.currency ?? 'EUR';
-                      final lines = <Widget>[
-                        Text('Filtered totals',
-                            style: Theme.of(context).textTheme.titleMedium),
-                        const SizedBox(height: 8),
-                        ..._filteredByCcy.entries
-                            .map((e) => Text(
-                                '${e.value.toStringAsFixed(2)} ${e.key}')),
-                        const SizedBox(height: 4),
-                        Text('≈ ${_filteredTotalBase.toStringAsFixed(2)} $base',
-                            style: Theme.of(context).textTheme.bodySmall),
-                      ];
-                      return Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: lines,
-                      );
-                    }),
+                    child: FutureBuilder<({
+                      Map<String, double> raw,
+                      Map<String, double> approx,
+                      double totalBase,
+                    })>(
+                      future: _computeFilteredTotals(filtered),
+                      builder: (ctx, snap) {
+                        if (!snap.hasData) {
+                          return const SizedBox(height: 8);
+                        }
+                        final data = snap.data!;
+                        final base = (_trip?.currency ?? 'EUR').toUpperCase();
+                        final codes = data.raw.keys.toList()..sort();
+
+                        final rows = <Widget>[
+                          Text('Filtered totals', style: Theme.of(context).textTheme.titleSmall),
+                          const SizedBox(height: 8),
+                        ];
+
+                        for (final c in codes) {
+                          final raw = data.raw[c] ?? 0.0;
+                          if (c == base) {
+                            rows.add(Text('${raw.toStringAsFixed(2)} $c'));
+                          } else {
+                            final approx = data.approx[c] ?? raw;
+                            rows.add(Text('${raw.toStringAsFixed(2)} $c (≈ ${approx.toStringAsFixed(2)} $base)'));
+                          }
+                        }
+
+                        rows.add(const SizedBox(height: 6));
+                        rows.add(Text('≈ ${data.totalBase.toStringAsFixed(2)} $base',
+                            style: Theme.of(context).textTheme.bodySmall));
+
+                        return Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: rows,
+                        );
+                      },
+                    ),
                   ),
                 ),
             ],
@@ -370,11 +401,11 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             onRefresh: _refresh,
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
-              itemCount: 1 + expenses.length,
+              itemCount: 1 + filtered.length,
               separatorBuilder: (_, i) => (i == 0) ? const SizedBox(height: 12) : const Divider(height: 1),
               itemBuilder: (_, i) {
                 if (i == 0) return filtersAndTotals; // top block
-                final e = expenses[i - 1];
+                final e = filtered[i - 1];
                 return ListTile(
                   title: Text(e.title),
                   subtitle: Text('${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}'),

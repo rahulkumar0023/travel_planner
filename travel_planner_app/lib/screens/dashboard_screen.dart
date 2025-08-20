@@ -61,6 +61,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   // Insights state
   Map<String, double> _byCcy = <String, double>{};          // e.g. {'EUR': 50, 'INR': 10_000}
+  // Show per-currency amounts already converted to the trip currency (≈)
+  Map<String, double> _byCcyApproxBase = <String, double>{};
   Map<String, double> _byCategoryBase = <String, double>{}; // in trip currency
   double _spentInBase = 0.0;
   double _dailyBurn = 0.0;
@@ -199,57 +201,83 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   Future<void> _recomputeInsights() async {
     final t = _activeTrip;
     if (t == null) return;
+    final base = t.currency.toUpperCase();
 
-    // 1) Raw by-currency buckets (for the “Spent currencies” list)
-    final byCcy = <String, double>{};
+    // 1) Raw buckets by each expense's own currency
+    final rawByCcy = <String, double>{};
     for (final e in _expenses) {
-      final c = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
-      byCcy[c] = (byCcy[c] ?? 0) + e.amount;
+      final c = (e.currency.isEmpty ? base : e.currency).toUpperCase();
+      rawByCcy[c] = (rawByCcy[c] ?? 0) + e.amount;
     }
 
-    // 2) ONE FX table for the trip currency; convert everything once
-    final rates = await FxService.loadRates(t.currency);
+    // 2) Build conversion factors per currency (to trip currency) and total
+    final factors = <String, double>{};          // e.g. {'PLN': 0.235, 'EUR': 1}
+    final approxBaseByCcy = <String, double>{};  // converted bucket amounts
+    double totalBase = 0.0;
 
-    double sumBase = 0.0;
+    for (final entry in rawByCcy.entries) {
+      final c = entry.key;
+      final raw = entry.value;
+      if (raw <= 0) { factors[c] = 1; approxBaseByCcy[c] = 0; continue; }
+
+      if (c == base) {
+        factors[c] = 1.0;
+        approxBaseByCcy[c] = raw;
+        totalBase += raw;
+        continue;
+      }
+
+      double? converted;
+      // Preferred: server convert per bucket (few requests)
+      try {
+        converted = await widget.api.convert(amount: raw, from: c, to: base);
+      } catch (_) {
+        // Fallback: local FX table
+        try {
+          final rates = await FxService.loadRates(base);
+          converted = FxService.convert(
+            amount: raw, from: c, to: base, ratesForBaseTo: rates,
+          );
+        } catch (_) {/* leave null */}
+      }
+
+      converted ??= raw; // last-resort identity
+      factors[c] = converted / raw;
+      approxBaseByCcy[c] = converted;
+      totalBase += converted;
+    }
+
+    // 3) Category totals in base currency (use factors)
     final byCatBase = <String, double>{};
     for (final e in _expenses) {
-      final from = (e.currency.isEmpty ? t.currency : e.currency).toUpperCase();
-      final base = FxService.convert(
-        amount: e.amount,
-        from: from,
-        to: t.currency,
-        ratesForBaseTo: rates,
-      );
-      sumBase += base;
+      final c = (e.currency.isEmpty ? base : e.currency).toUpperCase();
+      final f = factors[c] ?? 1.0;
+      final baseAmt = e.amount * f;
       final cat = (e.category.isEmpty ? 'Other' : e.category);
-      byCatBase[cat] = (byCatBase[cat] ?? 0) + base;
+      byCatBase[cat] = (byCatBase[cat] ?? 0) + baseAmt;
     }
 
-    // 3) daily burn & days left
-    final daysSoFar =
-        (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
-    final burn = sumBase / daysSoFar;
+    // 4) Daily burn / days left
+    final daysSoFar = (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
+    final burn = totalBase / daysSoFar;
     int? daysLeft;
     final budget = (_tripBudgetOverride ?? t.initialBudget);
     if (budget > 0 && burn > 0) {
-      final rem = (budget - sumBase);
+      final rem = budget - totalBase;
       daysLeft = rem <= 0 ? 0 : (rem / burn).ceil();
     }
 
     if (!mounted) return;
     setState(() {
-      _byCcy = byCcy;
-      _byCategoryBase = byCatBase;
-      _spentInBase = sumBase;
-
-      // 👇 keep the card’s “Spent” in lockstep with Insights
-      _spentInTripCcy = sumBase;
-
+      _byCcy = rawByCcy;                 // raw buckets (for display)
+      _byCcyApproxBase = approxBaseByCcy; // ≈ in trip currency
+      _byCategoryBase = byCatBase;       // for the bar chart
+      _spentInBase = totalBase;          // INSIGHTS total (now correct)
+      _spentInTripCcy = totalBase;       // keep card’s “Spent” in sync
       _dailyBurn = burn;
       _daysLeft = daysLeft;
     });
 
-    // keep the “≈ home” line fresh
     await _updateApproxHome();
   }
 
@@ -1032,13 +1060,18 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     );
                   }),
                   const SizedBox(height: 6),
-                  // “Spent currencies” lines (unchanged list but now also correct overall totals)
                   if (_byCcy.isNotEmpty) ...[
                     Text('Spent currencies:', style: Theme.of(context).textTheme.bodyMedium),
-                    ..._byCcy.entries.map((e) => Text(
-                          '${e.value.toStringAsFixed(2)} ${e.key}'
-                          '${e.key.toUpperCase() == t.currency.toUpperCase() ? '' : ' (≈ using FX)'}',
-                        )),
+                    ...((_byCcy.keys.toList()..sort()).map((ccy) {
+                      final raw = _byCcy[ccy] ?? 0;
+                      final approx = _byCcyApproxBase[ccy] ?? raw;
+                      final same = ccy.toUpperCase() == t.currency.toUpperCase();
+                      return Text(
+                        same
+                            ? '${raw.toStringAsFixed(2)} $ccy'
+                            : '${raw.toStringAsFixed(2)} $ccy  (≈ ${approx.toStringAsFixed(2)} ${t.currency})',
+                      );
+                    })),
                     Text('Total spent: ${_spentInBase.toStringAsFixed(2)} ${t.currency}'),
                   ],
                 ],
