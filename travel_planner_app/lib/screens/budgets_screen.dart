@@ -6,7 +6,7 @@ import '../models/budget.dart';
 import '../services/budgets_sync.dart';
 import '../services/archived_trips_store.dart';
 import '../services/outbox_service.dart';
-import 'monthly_overview_screen.dart';
+import 'monthly_budget_screen.dart';
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -572,12 +572,11 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
             },
           ),
           IconButton(
-            icon: const Icon(Icons.calendar_view_month_outlined),
+            icon: const Icon(Icons.calendar_month_outlined),
             tooltip: 'Monthly',
             onPressed: () {
               Navigator.of(context).push(
-                MaterialPageRoute(
-                    builder: (_) => MonthlyOverviewScreen(api: widget.api)),
+                MaterialPageRoute(builder: (_) => MonthlyBudgetScreen(api: widget.api)),
               );
             },
           ),
