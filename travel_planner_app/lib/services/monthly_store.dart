@@ -1,9 +1,10 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:collection/collection.dart';
+// monthly_store imports start
 import 'package:hive/hive.dart';
-
 import '../models/monthly_txn.dart';
+// monthly_store imports end
 import '../models/monthly_category.dart';
 
 /// Format helper used by ApiService.fetchMonthlySummary(...)
@@ -18,6 +19,11 @@ class MonthlyStore {
   static final Map<String, List<MonthlyTxn>> _txCache = {};
   static final Map<String, List<MonthlyCategory>> _catCache = {};
 
+  // txn box fields start
+  static const _txnBoxName = 'monthly_txns';
+  Box<MonthlyTxn> get _txn => Hive.box<MonthlyTxn>(_txnBoxName);
+  // txn box fields end
+
   // Storage keys
   static String _txKey(String monthKey)   => 'monthly_txns_v1_\$monthKey';
   static String _catKey(String monthKey)  => 'monthly_cats_v1_\$monthKey';
@@ -26,7 +32,19 @@ class MonthlyStore {
   Future<void> init() async {
     await Hive.openBox('monthly_budgets');
     await Hive.openBox('monthly_categories');
-    await Hive.openBox('monthly_txns');
+    // init setup start
+    // Register adapters if not already
+    if (!Hive.isAdapterRegistered(42)) {
+      Hive.registerAdapter(MonthlyTxnAdapter()); // typeId must match your model
+    }
+
+    // Open the txns box (id -> MonthlyTxn)
+    if (!Hive.isBoxOpen(_txnBoxName)) {
+      await Hive.openBox<MonthlyTxn>(_txnBoxName);
+    }
+
+    // ⚠️ If you also keep categories in this store, keep your existing opens here too.
+    // init setup end
   }
 
   // ---------- Transactions ----------
@@ -84,6 +102,30 @@ class MonthlyStore {
 
   /// Synchronous access to cached transactions (falls back to empty list).
   List<MonthlyTxn> txnsFor(String monthKey) => _txCache[monthKey] ?? <MonthlyTxn>[];
+
+  // deleteTxn helper start
+  Future<void> deleteTxn(String id) async {
+    // Remove from in-memory cache
+    for (final entry in _txCache.entries) {
+      final list = entry.value;
+      final next = list.where((t) => t.id != id).toList();
+      if (next.length != list.length) {
+        _txCache[entry.key] = next;
+        final p = await SharedPreferences.getInstance();
+        await p.setString(
+          _txKey(entry.key),
+          jsonEncode(next.map((e) => e.toJson()).toList()),
+        );
+        break;
+      }
+    }
+
+    // Also remove from Hive box if present
+    if (_txn.containsKey(id)) {
+      await _txn.delete(id);
+    }
+  }
+  // deleteTxn helper end
 
   // ---------- Categories (for monthly envelopes) ----------
   Future<List<MonthlyCategory>> categories(String monthKey) async {
