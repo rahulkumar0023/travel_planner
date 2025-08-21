@@ -63,7 +63,7 @@ class OutboxService {
   /// Returns number of operations sent successfully.
   static Future<int> flush({
     required Uri Function(String path) urlFor,                // e.g. (p) => Uri.parse('$baseUrl$p')
-    required Map<String, String> Function(bool json) headers, // e.g. api.headers
+    required Future<Map<String, String>> Function(bool json) headers, // e.g. api.headers
     Duration perRequestTimeout = const Duration(seconds: 7),
   }) async {
     var list = await _load();
@@ -74,7 +74,7 @@ class OutboxService {
       final op = list[i];
       try {
         final uri = urlFor(op.path);
-        final h = headers(true);
+        final h = await headers(true);
         http.Response res;
         switch (op.method) {
           case 'POST':

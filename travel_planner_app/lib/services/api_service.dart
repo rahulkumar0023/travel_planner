@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart'; // ← make sure you have this model
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/balance_row.dart';
 import '../models/budget.dart';
@@ -26,68 +27,34 @@ class _FxCache {
 
 class ApiService {
   final String baseUrl;
-
-  // Auth (set in Auth flow; attached to every request via _headers)
-  String? _authToken;
   bool lastBudgetsFromCache = false;
   bool lastTripsFromCache = false;
 
 // --- FX cache (1h TTL) ---
   final Map<String, _FxCache> _fx = {}; // key: 'FROM_TO'
 
-  // NOTE: cannot be const because _authToken is mutable.
   ApiService({required this.baseUrl});
 
-  /// Attach or clear bearer token (call this after successful sign-in).
-  void setAuthToken(String? token) => _authToken = token;
-
-  /// Standard headers for every call; adds Content-Type and Authorization when needed.
-  Map<String, String> _headers({bool jsonBody = false}) {
-    final h = <String, String>{};
-    if (jsonBody) h['Content-Type'] = 'application/json';
-    final t = _authToken;
-    if (t != null && t.isNotEmpty) h['Authorization'] = 'Bearer $t';
+  // 👇 NEW: read token from prefs
+  Future<Map<String, String>> _authHeaders() async {
+    final p = await SharedPreferences.getInstance();
+    final t = p.getString('api_jwt') ?? '';
+    final h = <String, String>{'Content-Type': 'application/json'};
+    if (t.isNotEmpty) h['Authorization'] = 'Bearer $t';
     return h;
   }
 
   // public helper for outbox
   Uri urlFor(String path) => Uri.parse('$baseUrl$path');
 
-  // expose headers for outbox (wraps your private _headers)
-  Map<String, String> headers(bool json) => _headers(jsonBody: json);
-
-  // -----------------------------
-  // Auth
-  // -----------------------------
-  Future<String> exchangeAuthToken({
-    required String provider, // 'google' | 'apple'
-    String? idToken,
-    String? authCode,
-  }) async {
-    final payload = {
-      'provider': provider,
-      if (idToken != null) 'idToken': idToken,
-      if (authCode != null) 'authorizationCode': authCode,
-    };
-    final res = await http.post(
-      Uri.parse('$baseUrl/auth/exchange'),
-      headers: _headers(jsonBody: true),
-      body: jsonEncode(payload),
-    );
-    if (res.statusCode != 200) {
-      throw Exception('Auth exchange failed: ${res.statusCode} ${res.body}');
-    }
-    final map = jsonDecode(res.body) as Map<String, dynamic>;
-    final token = (map['token'] ?? map['accessToken'] ?? map['jwt']) as String;
-    setAuthToken(token);
-    return token;
-  }
+  // expose headers for outbox
+  Future<Map<String, String>> headers(bool json) => _authHeaders();
 
   // -----------------------------
   // Trips
   // -----------------------------
   Future<List<Trip>> fetchTrips() async {
-    final res = await http.get(Uri.parse('$baseUrl/trips'), headers: _headers());
+    final res = await http.get(Uri.parse('$baseUrl/trips'), headers: await _authHeaders());
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
       return data.map((e) => Trip.fromJson(e)).toList();
@@ -111,7 +78,7 @@ class ApiService {
   Future<Trip> createTrip(Trip t) async {
     final res = await http.post(
       Uri.parse('$baseUrl/trips'),
-      headers: _headers(jsonBody: true),
+      headers: await _authHeaders(),
       body: jsonEncode(t.toJson()),
     );
     if (res.statusCode == 200 || res.statusCode == 201) {
@@ -124,7 +91,7 @@ class ApiService {
   Future<Trip> updateTrip(Trip t) async {
     final res = await http.put(
       Uri.parse('$baseUrl/trips/${t.id}'),
-      headers: _headers(jsonBody: true),
+      headers: await _authHeaders(),
       body: jsonEncode(t.toJson()),
     );
     if (res.statusCode != 200) {
@@ -134,7 +101,7 @@ class ApiService {
   }
 
   Future<void> deleteTrip(String id) async {
-    final res = await http.delete(Uri.parse('$baseUrl/trips/$id'), headers: _headers());
+    final res = await http.delete(Uri.parse('$baseUrl/trips/$id'), headers: await _authHeaders());
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete trip (${res.statusCode}) ${res.body}');
     }
@@ -146,7 +113,7 @@ class ApiService {
   Future<List<Expense>> fetchExpenses(String tripId) async {
     final res = await http.get(
       Uri.parse('$baseUrl/expenses/$tripId'),
-      headers: _headers(),
+      headers: await _authHeaders(),
     );
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
@@ -158,7 +125,7 @@ class ApiService {
   Future<void> addExpense(Expense e) async {
     final res = await http.post(
       Uri.parse('$baseUrl/expenses'),
-      headers: _headers(jsonBody: true),
+      headers: await _authHeaders(),
       body: jsonEncode(e.toJson()),
     );
     if (res.statusCode != 200 && res.statusCode != 201) {
@@ -168,7 +135,7 @@ class ApiService {
 
   Future<Expense> updateExpense(Expense e) async {
     final uri = Uri.parse('$baseUrl/expenses/${e.id}');
-    final res = await http.put(uri, headers: _headers(jsonBody: true), body: jsonEncode(e.toJson()));
+    final res = await http.put(uri, headers: await _authHeaders(), body: jsonEncode(e.toJson()));
     if (res.statusCode != 200) {
       throw Exception('Failed to update expense (${res.statusCode}) ${res.body}');
     }
@@ -177,7 +144,7 @@ class ApiService {
 
 
   Future<void> deleteExpense(String id) async {
-    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: _headers());
+    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: await _authHeaders());
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
     }
@@ -191,12 +158,12 @@ class ApiService {
     // Prefer /balances/{tripId}; fallback to legacy /expenses/split/{tripId}
     var res = await http.get(
       Uri.parse('$baseUrl/balances/$tripId'),
-      headers: _headers(),
+      headers: await _authHeaders(),
     );
     if (res.statusCode == 404) {
       res = await http.get(
         Uri.parse('$baseUrl/expenses/split/$tripId'),
-        headers: _headers(),
+        headers: await _authHeaders(),
       );
     }
     if (res.statusCode != 200) {
@@ -227,7 +194,7 @@ class ApiService {
 
     var res = await http.post(
       Uri.parse('$baseUrl/balances/settle'),
-      headers: _headers(jsonBody: true),
+      headers: await _authHeaders(),
       body: jsonEncode(payload),
     );
 
@@ -235,7 +202,7 @@ class ApiService {
     if (res.statusCode == 404) {
       res = await http.post(
         Uri.parse('$baseUrl/settlements'),
-        headers: _headers(jsonBody: true),
+        headers: await _authHeaders(),
         body: jsonEncode(payload),
       );
     }
@@ -306,7 +273,7 @@ class ApiService {
         'amount': amount.toString(),
       },
     );
-    final res = await http.get(uri, headers: _headers());
+    final res = await http.get(uri, headers: await _authHeaders());
     if (res.statusCode != 200) {
       if (kDebugMode) {
         debugPrint('convert(raw) HTTP ${res.statusCode}: ${res.body}');
@@ -344,7 +311,7 @@ class ApiService {
   Future<List<Budget>> fetchBudgets() async {
     final res = await http.get(
       Uri.parse('$baseUrl/budgets'),
-      headers: _headers(),
+      headers: await _authHeaders(),
     );
     if (res.statusCode == 404) return <Budget>[]; // backend not ready yet
     if (res.statusCode != 200) {
@@ -408,7 +375,7 @@ class ApiService {
       try {
         final res = await http.post(
           Uri.parse(url),
-          headers: _headers(jsonBody: true),
+          headers: await _authHeaders(),
           body: jsonEncode(payload),
         );
 
@@ -500,9 +467,9 @@ class ApiService {
       try {
         final uri = Uri.parse(e.url);
         final res = await (
-            e.method == 'PUT' ? http.put(uri, headers: _headers(jsonBody: true), body: jsonEncode(payload)) :
-            e.method == 'PATCH' ? http.patch(uri, headers: _headers(jsonBody: true), body: jsonEncode(payload)) :
-            http.post(uri, headers: _headers(jsonBody: true), body: jsonEncode(payload))
+            e.method == 'PUT' ? http.put(uri, headers: await _authHeaders(), body: jsonEncode(payload)) :
+            e.method == 'PATCH' ? http.patch(uri, headers: await _authHeaders(), body: jsonEncode(payload)) :
+            http.post(uri, headers: await _authHeaders(), body: jsonEncode(payload))
         );
         if (res.statusCode == 200) {
           final map = jsonDecode(res.body) as Map<String, dynamic>;
@@ -553,8 +520,8 @@ class ApiService {
       try {
         final uri = Uri.parse(a.url);
         final res = await (
-            a.method == 'DELETE' ? http.delete(uri, headers: _headers()) :
-            http.post(uri, headers: _headers())
+            a.method == 'DELETE' ? http.delete(uri, headers: await _authHeaders()) :
+            http.post(uri, headers: await _authHeaders())
         );
         if (res.statusCode == 200 || res.statusCode == 202 || res.statusCode == 204) {
           // deleteBudget: inside the success branch (200/202/204):
@@ -582,14 +549,14 @@ class ApiService {
   }) async {
     final res = await http.post(
       Uri.parse('$baseUrl/budgets/$tripBudgetId/link'),
-      headers: _headers(jsonBody: true),
+      headers: await _authHeaders(),
       body: jsonEncode({'monthlyBudgetId': monthlyBudgetId}),
     );
     if (res.statusCode == 404) {
       // Alternate legacy endpoint
       final res2 = await http.post(
         Uri.parse('$baseUrl/budget-links'),
-        headers: _headers(jsonBody: true),
+        headers: await _authHeaders(),
         body: jsonEncode({
           'tripBudgetId': tripBudgetId,
           'monthlyBudgetId': monthlyBudgetId,
@@ -611,13 +578,13 @@ class ApiService {
     // Preferred endpoint
     var res = await http.post(
       Uri.parse('$baseUrl/budgets/$tripBudgetId/unlink'),
-      headers: _headers(),
+      headers: await _authHeaders(),
     );
     if (res.statusCode == 404) {
       // Legacy fallback: delete the link row by trip id
       res = await http.delete(
         Uri.parse('$baseUrl/budget-links/$tripBudgetId'),
-        headers: _headers(),
+        headers: await _authHeaders(),
       );
     }
     if (res.statusCode != 200 && res.statusCode != 204) {

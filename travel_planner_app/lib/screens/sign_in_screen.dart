@@ -11,16 +11,22 @@ class SignInScreen extends StatefulWidget {
 }
 
 class _SignInScreenState extends State<SignInScreen> {
-  final _auth = AuthService();
+  late final AuthService _auth;
   bool _busy = false;
   String? _error;
+
+  @override
+  void initState() {
+    super.initState();
+    _auth = AuthService(baseUrl: widget.api.baseUrl);
+  }
 
   Future<void> _google() async {
     setState(() { _busy = true; _error = null; });
     try {
       final idToken = await _auth.signInWithGoogleIdToken();
       if (idToken == null) return;
-      await widget.api.exchangeAuthToken(provider: 'google', idToken: idToken);
+      await _auth.exchangeAndStoreToken(provider: 'google', idToken: idToken);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = '$e');
@@ -34,11 +40,9 @@ class _SignInScreenState extends State<SignInScreen> {
     try {
       final res = await _auth.signInWithApple();
       if (res == null) return;
-      await widget.api.exchangeAuthToken(
-        provider: 'apple',
-        idToken: res.idToken,
-        authCode: res.authCode,
-      );
+      final token = res.idToken ?? res.authCode;
+      if (token == null) throw Exception('Auth token missing');
+      await _auth.exchangeAndStoreToken(provider: 'apple', idToken: token);
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = '$e');
