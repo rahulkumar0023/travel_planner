@@ -4,10 +4,11 @@ import '../services/api_service.dart';
 import '../models/monthly.dart';
 import '../models/budget.dart'; // for BudgetKind
 // 👇 NEW: categories & monthly txns
-import '../models/category.dart';
+import '../models/monthly_category.dart';
 import '../models/monthly_txn.dart';
-import '../services/category_store.dart';
 import '../services/monthly_store.dart';
+import 'monthly/category_editor_sheet.dart';
+import 'monthly/txn_editor_sheet.dart';
 import 'category_manager_screen.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
@@ -54,6 +55,10 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
   String _monthName(int m) =>
       const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1];
 
+  // 👇 NEW: monthKey helper — place near other helpers
+  String get _monthKey =>
+      '${_month.year}-${_month.month.toString().padLeft(2, '0')}';
+
   Future<void> _openAddMenu() async {
     final choice = await showModalBottomSheet<String>(
       context: context,
@@ -62,6 +67,28 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            ListTile(
+              leading: const Icon(Icons.savings_outlined),
+              title: const Text('Add salary / income'),
+              onTap: () => Navigator.pop(context, 'add_income'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.remove_circle_outline),
+              title: const Text('Add expense'),
+              onTap: () => Navigator.pop(context, 'add_expense'),
+            ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.category_outlined),
+              title: const Text('New income category'),
+              onTap: () => Navigator.pop(context, 'add_income_cat'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.category_outlined),
+              title: const Text('New expense category'),
+              onTap: () => Navigator.pop(context, 'add_expense_cat'),
+            ),
+            const Divider(),
             ListTile(
               leading: const Icon(Icons.category_outlined),
               title: const Text('Add monthly envelope'),
@@ -74,9 +101,39 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
       ),
     );
     if (choice == 'envelope') {
-      await _createEnvelopeDialog(); // do the async work first…
+      await _createEnvelopeDialog();
       if (!mounted) return;
-      setState(_load); // …then refresh synchronously
+      setState(_load);
+    } else if (choice == 'add_income') {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => TxnEditorSheet(monthKey: _monthKey, type: 'income'),
+      );
+      if (mounted) setState(() {});
+    } else if (choice == 'add_expense') {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) => TxnEditorSheet(monthKey: _monthKey, type: 'expense'),
+      );
+      if (mounted) setState(() {});
+    } else if (choice == 'add_income_cat') {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) =>
+            CategoryEditorSheet(monthKey: _monthKey, type: 'income'),
+      );
+      if (mounted) setState(() {});
+    } else if (choice == 'add_expense_cat') {
+      await showModalBottomSheet(
+        context: context,
+        isScrollControlled: true,
+        builder: (_) =>
+            CategoryEditorSheet(monthKey: _monthKey, type: 'expense'),
+      );
+      if (mounted) setState(() {});
     }
   }
 
@@ -180,12 +237,56 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
           final summary = (snap.data as List)[0] as MonthlyBudgetSummary;
           final envelopes = (snap.data as List)[1] as List<EnvelopeVM>;
 
+            // 👉 NEW: fetch categories & transactions for this month
+            final incomeCats = MonthlyStore.instance.categoriesFor(_monthKey, type: 'income', parentId: null);
+            final expenseCats = MonthlyStore.instance.categoriesFor(_monthKey, type: 'expense', parentId: null);
+            final txns = MonthlyStore.instance.txnsFor(_monthKey);
+
           return ListView(
             children: [
               _SummaryCard(summary: summary),
               const SizedBox(height: 8),
               // 👇 NEW: show envelopes
               ...envelopes.map((e) => _BudgetRow(env: e)).toList(),
+                // ===== MonthlyScreen: Categories & Txns — START =====
+                const SizedBox(height: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const SizedBox(height: 8),
+                      Text('Categories', style: Theme.of(context).textTheme.titleMedium),
+                      const SizedBox(height: 8),
+                      if (incomeCats.isNotEmpty)
+                        Text('Income', style: Theme.of(context).textTheme.labelLarge),
+                      for (final c in incomeCats)
+                        _CategoryTile(category: c, monthKey: _monthKey),
+                      const SizedBox(height: 8),
+                      if (expenseCats.isNotEmpty)
+                        Text('Expenses', style: Theme.of(context).textTheme.labelLarge),
+                      for (final c in expenseCats)
+                        _CategoryTile(category: c, monthKey: _monthKey),
+                      const SizedBox(height: 16),
+                      Text('Recent transactions', style: Theme.of(context).textTheme.titleSmall),
+                      const SizedBox(height: 8),
+                      for (final t in txns.take(8))
+                        ListTile(
+                          dense: true,
+                          title: Text('${t.type == "income" ? "+" : "-"} ${t.amount.toStringAsFixed(2)} ${t.currency} • ${t.note.isEmpty ? "(no note)" : t.note}'),
+                          subtitle: Text('${t.date.toLocal()}'.split(' ').first),
+                          trailing: IconButton(
+                            icon: const Icon(Icons.delete_outline),
+                            onPressed: () async {
+                              await MonthlyStore.instance.deleteTxn(t.id);
+                              setState(() {});
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                // ===== MonthlyScreen: Categories & Txns — END =====
             ],
           );
         },
@@ -268,16 +369,9 @@ class _BudgetRow extends StatelessWidget {
                         style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),
-              ),
-                // ▶︎ Add income/expense menu start
-                IconButton(
-                  icon: const Icon(Icons.add_circle_outline),
-                  tooltip: 'Add to this month',
-                  onPressed: () => _addToMonth(context, env),
                 ),
-                // ◀︎ Add income/expense menu end
               ],
-            ),
+              ),
           const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
@@ -312,163 +406,9 @@ class _BudgetRow extends StatelessWidget {
   }
 }
 
-// ▶︎ Monthly add helpers start
-Future<void> _addToMonth(BuildContext context, EnvelopeVM env) async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.savings_outlined),
-              title: const Text('Add salary / income'),
-              onTap: () => Navigator.pop(context, 'income'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.remove_circle_outline),
-              title: const Text('Add monthly expense'),
-              onTap: () => Navigator.pop(context, 'expense'),
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-
-    if (choice == null) return;
-    if (choice == 'income') {
-      await _createMonthlyTxnDialog(context, env, kind: MonthlyTxnKind.income);
-    } else {
-      await _createMonthlyTxnDialog(context, env, kind: MonthlyTxnKind.expense);
-    }
-    // After save → soft reload
-    // NOTE: call into parent state via the nearest State using context.findAncestorStateOfType
-    final st = context.findAncestorStateOfType<State>();
-    if (st is _MonthlyBudgetScreenState) {
-      st.setState(st._load); // sync refresh (no async in setState)
-    }
-  }
-
-Future<void> _createMonthlyTxnDialog(
-  BuildContext context,
-  EnvelopeVM env, {
-  required MonthlyTxnKind kind,
-}) async {
-    final monthKey = '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}';
-    final isIncome = kind == MonthlyTxnKind.income;
-    final roots = isIncome ? await CategoryStore.roots(CategoryType.income)
-                           : await CategoryStore.roots(CategoryType.expense);
-    String? rootId = roots.isNotEmpty ? roots.first.id : null;
-    final subs = (rootId == null) ? <CategoryItem>[] : await CategoryStore.subsOf(rootId);
-    String? subId = subs.isNotEmpty ? subs.first.id : null;
-
-    final amountCtrl = TextEditingController();
-    final currencyCtrl = TextEditingController(text: env.currency);
-    final noteCtrl = TextEditingController();
-    DateTime when = DateTime.now();
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) {
-        return StatefulBuilder(builder: (ctx, setD) {
-          return AlertDialog(
-            title: Text(isIncome ? 'Add salary / income' : 'Add monthly expense'),
-            content: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  // Category pickers
-                  DropdownButtonFormField<String>(
-                    value: rootId,
-                    items: roots.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
-                    decoration: const InputDecoration(labelText: 'Category'),
-                    onChanged: (v) async {
-                      rootId = v;
-                      final nextSubs = (v == null) ? <CategoryItem>[] : await CategoryStore.subsOf(v);
-                      setD(() {
-                        subId = nextSubs.isNotEmpty ? nextSubs.first.id : null;
-                      });
-                    },
-                  ),
-                  const SizedBox(height: 8),
-                  DropdownButtonFormField<String>(
-                    value: subId,
-                    items: [
-                      const DropdownMenuItem(value: null, child: Text('— none —')),
-                      ...((rootId == null) ? <CategoryItem>[] : (subs))
-                          .map((s) => DropdownMenuItem(value: s.id, child: Text(s.name))),
-                    ],
-                    decoration: const InputDecoration(labelText: 'Subcategory (optional)'),
-                    onChanged: (v) => setD(() => subId = v),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: amountCtrl,
-                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                    decoration: InputDecoration(labelText: isIncome ? 'Amount (salary)' : 'Amount'),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: currencyCtrl,
-                    textCapitalization: TextCapitalization.characters,
-                    decoration: const InputDecoration(labelText: 'Currency (ISO)'),
-                  ),
-                  const SizedBox(height: 8),
-                  TextField(
-                    controller: noteCtrl,
-                    decoration: const InputDecoration(labelText: 'Note (optional)'),
-                  ),
-                  const SizedBox(height: 8),
-                  TextButton.icon(
-                    icon: const Icon(Icons.event),
-                    label: Text('${when.year}-${when.month.toString().padLeft(2, '0')}-${when.day.toString().padLeft(2, '0')}'),
-                    onPressed: () async {
-                      final picked = await showDatePicker(
-                        context: ctx,
-                        firstDate: DateTime(2020),
-                        lastDate: DateTime(2100),
-                        initialDate: when,
-                      );
-                      if (picked != null) setD(() => when = picked);
-                    },
-                  ),
-                ],
-              ),
-            ),
-            actions: [
-              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-              FilledButton(
-                onPressed: () async {
-                  final id = 'mtx-${DateTime.now().millisecondsSinceEpoch}';
-                  final txn = MonthlyTxn(
-                    id: id,
-                    monthKey: monthKey,
-                    kind: kind,
-                    currency: currencyCtrl.text.trim().toUpperCase(),
-                    amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
-                    date: when,
-                    categoryId: rootId,
-                    subcategoryId: subId,
-                    note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
-                  );
-                  await MonthlyStore.add(monthKey, txn);
-                  if (ctx.mounted) Navigator.pop(ctx);
-                },
-                child: const Text('Save'),
-              ),
-            ],
-          );
-        });
-      },
-    );
-  }
-  // ◀︎ Monthly add helpers end
-
-class _Circle extends StatelessWidget {
-  final Color color;
-  final String label;
+  class _Circle extends StatelessWidget {
+    final Color color;
+    final String label;
   const _Circle({required this.color, required this.label});
   @override
   Widget build(BuildContext context) {
@@ -476,6 +416,55 @@ class _Circle extends StatelessWidget {
       radius: 16,
       backgroundColor: color,
       child: Text(label, style: const TextStyle(color: Colors.white)),
+    );
+  }
+}
+
+class _CategoryTile extends StatelessWidget {
+  final MonthlyCategory category;
+  final String monthKey;
+  const _CategoryTile({required this.category, required this.monthKey});
+
+  @override
+  Widget build(BuildContext context) {
+    final subs = MonthlyStore.instance
+        .categoriesFor(monthKey, type: category.type, parentId: category.id);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        ListTile(
+          dense: true,
+          title: Text(category.name),
+          leading: const Icon(Icons.folder_open),
+          trailing: IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: 'Add sub-category',
+            onPressed: () async {
+              await showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => CategoryEditorSheet(
+                    monthKey: monthKey, type: category.type, parent: category),
+              );
+              (context as Element).markNeedsBuild();
+            },
+          ),
+        ),
+        if (subs.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(left: 24),
+            child: Column(
+              children: [
+                for (final s in subs)
+                  ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.subdirectory_arrow_right),
+                    title: Text(s.name),
+                  ),
+              ],
+            ),
+          ),
+      ],
     );
   }
 }

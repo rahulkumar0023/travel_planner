@@ -1,83 +1,36 @@
-class MonthlySubcategory {
-  final String id;
-  final String name;
-  final double planned; // planned amount for the month
-  MonthlySubcategory({
-    required this.id,
-    required this.name,
-    this.planned = 0,
-  });
+// ===== monthly_category.dart — START =====
+// Description: Hive model for Monthly Category. Supports sub-categories via parentId.
+// TypeId: pick a free one; keep unique across your app. Example: 41.
 
-  MonthlySubcategory copyWith({String? id, String? name, double? planned}) =>
-      MonthlySubcategory(
-        id: id ?? this.id,
-        name: name ?? this.name,
-        planned: planned ?? this.planned,
-      );
+import 'package:hive/hive.dart';
 
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'name': name,
-        'planned': planned,
-      };
-  factory MonthlySubcategory.fromJson(Map<String, dynamic> j) =>
-      MonthlySubcategory(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        planned: (j['planned'] as num?)?.toDouble() ?? 0,
-      );
-}
+part 'monthly_category.g.dart';
 
-enum MonthlyKind { income, expense }
+@HiveType(typeId: 41) // 👈 NEW: ensure this does not clash with existing adapters
+class MonthlyCategory extends HiveObject {
+  @HiveField(0)
+  String id; // uuid
 
-class MonthlyCategory {
-  final String id;
-  final MonthlyKind kind;
-  final String name; // e.g. “Food”, “Salary”
-  final String currency; // envelope currency (usually your monthly base)
-  final List<MonthlySubcategory> subs;
+  @HiveField(1)
+  String name;
+
+  @HiveField(2)
+  String monthKey; // 'YYYY-MM' e.g., '2025-08'
+
+  @HiveField(3)
+  String type; // 'income' | 'expense'
+
+  @HiveField(4)
+  String? parentId; // if set => sub-category of that category
 
   MonthlyCategory({
     required this.id,
-    required this.kind,
     required this.name,
-    required this.currency,
-    this.subs = const [],
+    required this.monthKey,
+    required this.type,
+    this.parentId,
   });
 
-  MonthlyCategory copyWith({
-    String? id,
-    MonthlyKind? kind,
-    String? name,
-    String? currency,
-    List<MonthlySubcategory>? subs,
-  }) =>
-      MonthlyCategory(
-        id: id ?? this.id,
-        kind: kind ?? this.kind,
-        name: name ?? this.name,
-        currency: currency ?? this.currency,
-        subs: subs ?? this.subs,
-      );
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'kind': kind.name,
-        'name': name,
-        'currency': currency,
-        'subs': subs.map((s) => s.toJson()).toList(),
-      };
-
-  factory MonthlyCategory.fromJson(Map<String, dynamic> j) => MonthlyCategory(
-        id: j['id'] as String,
-        kind: (j['kind'] as String) == 'income'
-            ? MonthlyKind.income
-            : MonthlyKind.expense,
-        name: j['name'] as String,
-        currency: (j['currency'] as String?) ?? 'EUR',
-        subs: ((j['subs'] as List?) ?? const [])
-            .map((e) => MonthlySubcategory.fromJson(
-                Map<String, dynamic>.from(e as Map)))
-            .toList(),
-      );
+  bool get isSub => parentId != null;
 }
+// ===== monthly_category.dart — END =====
