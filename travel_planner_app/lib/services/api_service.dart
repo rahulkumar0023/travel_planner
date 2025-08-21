@@ -15,7 +15,7 @@ import '../models/monthly.dart';
 import 'trip_storage_service.dart';
 import 'fx_service.dart';
 import '../models/monthly_txn.dart';
-import '../services/monthly_store.dart';
+import './monthly_store.dart';
 
 class _FxCache {
   _FxCache(this.rate, this.ts);
