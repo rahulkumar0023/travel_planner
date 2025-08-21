@@ -20,7 +20,7 @@ class ExpensesScreen extends StatefulWidget {
 
 class _ExpensesScreenState extends State<ExpensesScreen> {
   Trip? _trip;
-  late Future<List<Expense>> _future;
+  Future<List<Expense>> _future = Future.value(<Expense>[]);
 
   // --- Filters state ---
   String? _fCategory;
@@ -40,7 +40,28 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   void initState() {
     super.initState();
     _trip = TripStorageService.loadLightweight();
-    _future = _trip == null ? Future.value(<Expense>[]) : widget.api.fetchExpenses(_trip!.id);
+    () async {
+      try {
+        await widget.api.waitForToken();
+        if (!mounted) return;
+        if (_trip == null) {
+          setState(() {
+            _future = Future.value(<Expense>[]);
+          });
+        } else {
+          final fut = widget.api.fetchExpenses(_trip!.id);
+          setState(() {
+            _future = fut;
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _future = Future.error(e);
+          });
+        }
+      }
+    }();
   }
 
   // refresh by re-fetching

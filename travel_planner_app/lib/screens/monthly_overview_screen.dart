@@ -13,7 +13,8 @@ class MonthlyOverviewScreen extends StatefulWidget {
 
 class _MonthlyOverviewScreenState extends State<MonthlyOverviewScreen> {
   DateTime _month = DateTime(DateTime.now().year, DateTime.now().month);
-  late Future<_MonthlyData> _future;
+  Future<_MonthlyData> _future = Future.value(
+      _MonthlyData(month: DateTime.now(), categories: const [], totalBudgeted: 0, totalSpent: 0));
 
   @override
   void initState() {
@@ -22,6 +23,7 @@ class _MonthlyOverviewScreenState extends State<MonthlyOverviewScreen> {
   }
 
   Future<_MonthlyData> _load() async {
+    await widget.api.waitForToken();
     // 1) Fetch all budgets (monthly + trip)
     final budgets = await widget.api.fetchBudgetsOrCache();
     final monthly = budgets.where((b) => b.kind == BudgetKind.monthly).toList();

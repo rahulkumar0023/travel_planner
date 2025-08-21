@@ -20,7 +20,7 @@ class BudgetsScreen extends StatefulWidget {
 }
 
 class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateMixin {
-  late Future<List<Budget>> _future;
+  Future<List<Budget>> _future = Future.value(<Budget>[]);
   String _home = TripStorageService.getHomeCurrency();
 
   // Budgets knownTripIds fields start
@@ -36,8 +36,24 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
   @override
   void initState() {
     super.initState();
-    _future = widget.api.fetchBudgetsOrCache();
-    _loadTripIds();
+    () async {
+      try {
+        await widget.api.waitForToken();
+        final fut = widget.api.fetchBudgetsOrCache();
+        if (mounted) {
+          setState(() {
+            _future = fut;
+          });
+          _loadTripIds();
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _future = Future.error(e);
+          });
+        }
+      }
+    }();
   }
 
 // Budgets _refresh sync start

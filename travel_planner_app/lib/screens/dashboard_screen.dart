@@ -98,6 +98,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   // 👇 NEW: boot sequence start
   Future<void> _boot() async {
+    await widget.api.waitForToken();
     await _ensureActiveTrip();
     await _loadLocal();            // will recalc + then update home (see patch below)
     await _loadTripBudgetOverride();

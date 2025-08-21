@@ -22,14 +22,20 @@ class MonthlyBudgetScreen extends StatefulWidget {
 class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
   late DateTime _month;
   // 👇 NEW: change budgets list to EnvelopeVM
-  late Future<MonthlyBudgetSummary> _summaryFut;
-  late Future<List<EnvelopeVM>> _budgetsFut;
+  Future<MonthlyBudgetSummary> _summaryFut =
+      Future.value(MonthlyBudgetSummary(currency: '', totalBudgeted: 0, totalSpent: 0));
+  Future<List<EnvelopeVM>> _budgetsFut = Future.value(<EnvelopeVM>[]);
 
   @override
   void initState() {
     super.initState();
     _month = DateTime(DateTime.now().year, DateTime.now().month, 1);
-    _load();
+    () async {
+      try {
+        await widget.api.waitForToken();
+        if (mounted) setState(_load);
+      } catch (_) {}
+    }();
   }
 
   // 👇 NEW: wire to the new ApiService methods
