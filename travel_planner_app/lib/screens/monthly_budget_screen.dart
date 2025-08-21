@@ -3,6 +3,12 @@ import '../services/api_service.dart';
 // 👇 NEW: Monthly view-models for this screen
 import '../models/monthly.dart';
 import '../models/budget.dart'; // for BudgetKind
+// 👇 NEW: categories & monthly txns
+import '../models/category.dart';
+import '../models/monthly_txn.dart';
+import '../services/category_store.dart';
+import '../services/monthly_store.dart';
+import 'category_manager_screen.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
   final ApiService api;
@@ -135,14 +141,25 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Monthly Budget'),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.calendar_month_outlined),
-            tooltip: 'Pick month',
-            onPressed: _pickMonth,
-          ),
+        appBar: AppBar(
+          title: const Text('Monthly Budget'),
+          actions: [
+            // 👇 NEW: Manage categories action start
+            IconButton(
+              tooltip: 'Manage categories',
+              icon: const Icon(Icons.folder_open_outlined),
+              onPressed: () {
+                Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const CategoryManagerScreen()),
+                );
+              },
+            ),
+            // 👆 Manage categories action end
+            IconButton(
+              icon: const Icon(Icons.calendar_month_outlined),
+              tooltip: 'Pick month',
+              onPressed: _pickMonth,
+            ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
@@ -201,6 +218,10 @@ class _SummaryCard extends StatelessWidget {
           LinearProgressIndicator(value: pct, minHeight: 8),
           const SizedBox(height: 8),
           Text('Spent ${summary.totalSpent.toStringAsFixed(2)} / ${summary.totalBudgeted.toStringAsFixed(2)} ${summary.currency}'),
+          Text('Income (this month): ${summary.totalIncome.toStringAsFixed(2)} ${summary.currency}',
+              style: Theme.of(context).textTheme.bodySmall),
+          Text('Monthly expenses (manual): ${summary.totalMonthExpenses.toStringAsFixed(2)} ${summary.currency}',
+              style: Theme.of(context).textTheme.bodySmall),
         ],
       ),
     );
@@ -248,14 +269,15 @@ class _BudgetRow extends StatelessWidget {
                   ],
                 ),
               ),
-              IconButton(
-                icon: const Icon(Icons.add_circle_outline),
-                onPressed: () => ScaffoldMessenger.of(context)
-                    .showSnackBar(const SnackBar(content: Text('Coming soon: add sub-budget/expense'))),
-                tooltip: 'Add',
-              ),
-            ],
-          ),
+                // ▶︎ Add income/expense menu start
+                IconButton(
+                  icon: const Icon(Icons.add_circle_outline),
+                  tooltip: 'Add to this month',
+                  onPressed: () => _addToMonth(context, env),
+                ),
+                // ◀︎ Add income/expense menu end
+              ],
+            ),
           const SizedBox(height: 10),
           ClipRRect(
             borderRadius: BorderRadius.circular(8),
@@ -289,6 +311,160 @@ class _BudgetRow extends StatelessWidget {
     );
   }
 }
+
+// ▶︎ Monthly add helpers start
+Future<void> _addToMonth(BuildContext context, EnvelopeVM env) async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.savings_outlined),
+              title: const Text('Add salary / income'),
+              onTap: () => Navigator.pop(context, 'income'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.remove_circle_outline),
+              title: const Text('Add monthly expense'),
+              onTap: () => Navigator.pop(context, 'expense'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+
+    if (choice == null) return;
+    if (choice == 'income') {
+      await _createMonthlyTxnDialog(context, env, kind: MonthlyTxnKind.income);
+    } else {
+      await _createMonthlyTxnDialog(context, env, kind: MonthlyTxnKind.expense);
+    }
+    // After save → soft reload
+    // NOTE: call into parent state via the nearest State using context.findAncestorStateOfType
+    final st = context.findAncestorStateOfType<State>();
+    if (st is _MonthlyBudgetScreenState) {
+      st.setState(st._load); // sync refresh (no async in setState)
+    }
+  }
+
+Future<void> _createMonthlyTxnDialog(
+  BuildContext context,
+  EnvelopeVM env, {
+  required MonthlyTxnKind kind,
+}) async {
+    final monthKey = '${DateTime.now().year}-${DateTime.now().month.toString().padLeft(2, '0')}';
+    final isIncome = kind == MonthlyTxnKind.income;
+    final roots = isIncome ? await CategoryStore.roots(CategoryType.income)
+                           : await CategoryStore.roots(CategoryType.expense);
+    String? rootId = roots.isNotEmpty ? roots.first.id : null;
+    final subs = (rootId == null) ? <CategoryItem>[] : await CategoryStore.subsOf(rootId);
+    String? subId = subs.isNotEmpty ? subs.first.id : null;
+
+    final amountCtrl = TextEditingController();
+    final currencyCtrl = TextEditingController(text: env.currency);
+    final noteCtrl = TextEditingController();
+    DateTime when = DateTime.now();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(builder: (ctx, setD) {
+          return AlertDialog(
+            title: Text(isIncome ? 'Add salary / income' : 'Add monthly expense'),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Category pickers
+                  DropdownButtonFormField<String>(
+                    value: rootId,
+                    items: roots.map((c) => DropdownMenuItem(value: c.id, child: Text(c.name))).toList(),
+                    decoration: const InputDecoration(labelText: 'Category'),
+                    onChanged: (v) async {
+                      rootId = v;
+                      final nextSubs = (v == null) ? <CategoryItem>[] : await CategoryStore.subsOf(v);
+                      setD(() {
+                        subId = nextSubs.isNotEmpty ? nextSubs.first.id : null;
+                      });
+                    },
+                  ),
+                  const SizedBox(height: 8),
+                  DropdownButtonFormField<String>(
+                    value: subId,
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('— none —')),
+                      ...((rootId == null) ? <CategoryItem>[] : (subs))
+                          .map((s) => DropdownMenuItem(value: s.id, child: Text(s.name))),
+                    ],
+                    decoration: const InputDecoration(labelText: 'Subcategory (optional)'),
+                    onChanged: (v) => setD(() => subId = v),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: amountCtrl,
+                    keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                    decoration: InputDecoration(labelText: isIncome ? 'Amount (salary)' : 'Amount'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: currencyCtrl,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(labelText: 'Currency (ISO)'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextField(
+                    controller: noteCtrl,
+                    decoration: const InputDecoration(labelText: 'Note (optional)'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton.icon(
+                    icon: const Icon(Icons.event),
+                    label: Text('${when.year}-${when.month.toString().padLeft(2, '0')}-${when.day.toString().padLeft(2, '0')}'),
+                    onPressed: () async {
+                      final picked = await showDatePicker(
+                        context: ctx,
+                        firstDate: DateTime(2020),
+                        lastDate: DateTime(2100),
+                        initialDate: when,
+                      );
+                      if (picked != null) setD(() => when = picked);
+                    },
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+              FilledButton(
+                onPressed: () async {
+                  final id = 'mtx-${DateTime.now().millisecondsSinceEpoch}';
+                  final txn = MonthlyTxn(
+                    id: id,
+                    monthKey: monthKey,
+                    kind: kind,
+                    currency: currencyCtrl.text.trim().toUpperCase(),
+                    amount: double.tryParse(amountCtrl.text.trim()) ?? 0,
+                    date: when,
+                    categoryId: rootId,
+                    subcategoryId: subId,
+                    note: noteCtrl.text.trim().isEmpty ? null : noteCtrl.text.trim(),
+                  );
+                  await MonthlyStore.add(monthKey, txn);
+                  if (ctx.mounted) Navigator.pop(ctx);
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        });
+      },
+    );
+  }
+  // ◀︎ Monthly add helpers end
 
 class _Circle extends StatelessWidget {
   final Color color;

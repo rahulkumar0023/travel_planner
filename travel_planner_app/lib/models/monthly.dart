@@ -22,13 +22,18 @@ class EnvelopeVM {
 class MonthlyBudgetSummary {
   final String currency;      // summary currency (monthly currency)
   final double totalBudgeted; // sum(planned)
-  final double totalSpent;    // sum(spent)
+  final double totalSpent;    // trip-linked + monthly expenses
+  final double totalIncome;      // salary etc. (in monthly currency)
+  final double totalMonthExpenses;
+
   MonthlyBudgetSummary({
     required this.currency,
     required this.totalBudgeted,
     required this.totalSpent,
+    this.totalIncome = 0.0,
+    this.totalMonthExpenses = 0.0,
   });
-  double get remaining => (totalBudgeted - totalSpent);
+  double get remaining => (totalBudgeted + totalIncome) - totalSpent;
   double get pctSpent => totalBudgeted <= 0 ? 0.0 : (totalSpent / totalBudgeted).clamp(0.0, 1.0);
 }
 // MonthlyBudgetSummary end

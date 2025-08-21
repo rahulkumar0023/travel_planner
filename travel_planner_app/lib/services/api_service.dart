@@ -14,6 +14,8 @@ import 'package:collection/collection.dart';
 import '../models/monthly.dart';
 import 'trip_storage_service.dart';
 import 'fx_service.dart';
+import '../models/monthly_txn.dart';
+import '../services/monthly_store.dart';
 
 class _FxCache {
   _FxCache(this.rate, this.ts);
@@ -702,14 +704,44 @@ class ApiService {
 
   Future<MonthlyBudgetSummary> fetchMonthlySummary(DateTime month) async {
     final envs = await fetchMonthlyEnvelopes(month);
-    // If there are zero envelopes for the month, try best-effort currency
     final ccy = envs.isNotEmpty ? envs.first.currency : TripStorageService.getHomeCurrency();
     final totalPlanned = envs.fold<double>(0.0, (p, e) => p + e.planned);
-    final totalSpent   = envs.fold<double>(0.0, (p, e) => p + e.spent);
+
+    // Load month-local transactions and convert to monthly currency if needed
+    final key = monthKeyOf(month);
+    final txns = await MonthlyStore.all(key);
+
+    double monthIncome = 0.0;
+    double monthExpenses = 0.0;
+
+    for (final t in txns) {
+      final from = t.currency.toUpperCase();
+      final to = ccy.toUpperCase();
+      double v = t.amount;
+      if (from != to) {
+        try {
+          v = await convert(amount: t.amount, from: from, to: to);
+        } catch (_) {
+          v = t.amount;
+        }
+      }
+      if (t.kind == MonthlyTxnKind.income) {
+        monthIncome += v;
+      } else {
+        monthExpenses += v;
+      }
+    }
+
+    // Trip-linked spent is already inside fetchMonthlyEnvelopes() as env.spent
+    final tripLinkedSpent = envs.fold<double>(0.0, (p, e) => p + e.spent);
+    final totalSpent = tripLinkedSpent + monthExpenses;
+
     return MonthlyBudgetSummary(
       currency: ccy,
       totalBudgeted: totalPlanned,
       totalSpent: totalSpent,
+      totalIncome: monthIncome,
+      totalMonthExpenses: monthExpenses,
     );
   }
   // ---- Monthly helpers end ----
