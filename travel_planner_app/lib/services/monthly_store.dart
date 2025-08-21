@@ -1,114 +1,162 @@
-// ===== monthly_store.dart — START =====
-// Description: Local store for monthly categories & transactions (Hive).
-// Usage: MonthlyStore.instance.*
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:collection/collection.dart';
 
-import 'package:hive/hive.dart';
-import 'package:uuid/uuid.dart';
-import '../models/monthly_category.dart';
 import '../models/monthly_txn.dart';
+import '../models/monthly_category.dart';
+
+/// Format helper used by ApiService.fetchMonthlySummary(...)
+String monthKeyOf(DateTime d) =>
+    '${d.year}-${d.month.toString().padLeft(2, '0')}';
 
 class MonthlyStore {
   MonthlyStore._();
   static final MonthlyStore instance = MonthlyStore._();
 
-  static const _catBoxName = 'monthly_categories';
-  static const _txnBoxName = 'monthly_txns';
+  // Caches for sync access
+  static final Map<String, List<MonthlyTxn>> _txCache = {};
+  static final Map<String, List<MonthlyCategory>> _catCache = {};
 
-  Future<void> init() async {
-    if (!Hive.isAdapterRegistered(41)) {
-      Hive.registerAdapter(MonthlyCategoryAdapter());
+  // Storage keys
+  static String _txKey(String monthKey)   => 'monthly_txns_v1_\$monthKey';
+  static String _catKey(String monthKey)  => 'monthly_cats_v1_\$monthKey';
+
+  // ---------- Transactions ----------
+  /// STATIC: used by ApiService.fetchMonthlySummary(...)
+  static Future<List<MonthlyTxn>> all(String monthKey) async {
+    if (_txCache.containsKey(monthKey)) return _txCache[monthKey]!;
+    final p = await SharedPreferences.getInstance();
+    final s = p.getString(_txKey(monthKey));
+    if (s == null || s.isEmpty) {
+      _txCache[monthKey] = <MonthlyTxn>[];
+      return _txCache[monthKey]!;
     }
-    if (!Hive.isAdapterRegistered(42)) {
-      Hive.registerAdapter(MonthlyTxnAdapter());
+    try {
+      final raw = (jsonDecode(s) as List).cast<Map<String, dynamic>>();
+      final list = raw.map(MonthlyTxn.fromJson).toList();
+      _txCache[monthKey] = list;
+      return list;
+    } catch (_) {
+      _txCache[monthKey] = <MonthlyTxn>[];
+      return _txCache[monthKey]!;
     }
-    await Hive.openBox<MonthlyCategory>(_catBoxName);
-    await Hive.openBox<MonthlyTxn>(_txnBoxName);
   }
 
-  Box<MonthlyCategory> get _catBox => Hive.box<MonthlyCategory>(_catBoxName);
-  Box<MonthlyTxn> get _txnBox => Hive.box<MonthlyTxn>(_txnBoxName);
-  final _uuid = const Uuid();
-
-  // 👇 NEW: Category CRUD
-  Future<MonthlyCategory> addCategory({
-    required String name,
+  /// Add/Upsert a monthly transaction (income or expense)
+  Future<void> addTxn({
     required String monthKey,
+    required MonthlyTxnKind kind, // income | expense
+    required String currency,
+    required double amount,
+    String? categoryId,
+    String? subCategoryId,
+    String? note,
+    DateTime? date,
+  }) async {
+    final now = date ?? DateTime.now();
+    final list = await MonthlyStore.all(monthKey);
+    final item = MonthlyTxn(
+      id: 'txn-\${now.microsecondsSinceEpoch}',
+      kind: kind,
+      currency: currency.toUpperCase(),
+      amount: amount,
+      categoryId: categoryId,
+      subCategoryId: subCategoryId,
+      note: note ?? '',
+      date: now,
+    );
+    final next = [...list, item];
+    _txCache[monthKey] = next;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _txKey(monthKey),
+      jsonEncode(next.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  /// Synchronous access to cached transactions (falls back to empty list).
+  List<MonthlyTxn> txnsFor(String monthKey) => _txCache[monthKey] ?? <MonthlyTxn>[];
+
+  // ---------- Categories (for monthly envelopes) ----------
+  Future<List<MonthlyCategory>> categories(String monthKey) async {
+    if (_catCache.containsKey(monthKey)) return _catCache[monthKey]!;
+    final p = await SharedPreferences.getInstance();
+    final s = p.getString(_catKey(monthKey));
+    if (s == null || s.isEmpty) {
+      _catCache[monthKey] = <MonthlyCategory>[];
+      return _catCache[monthKey]!;
+    }
+    try {
+      final raw = (jsonDecode(s) as List).cast<Map<String, dynamic>>();
+      final list = raw.map(MonthlyCategory.fromJson).toList();
+      _catCache[monthKey] = list;
+      return list;
+    } catch (_) {
+      _catCache[monthKey] = <MonthlyCategory>[];
+      return _catCache[monthKey]!;
+    }
+  }
+
+  /// Synchronous access with optional filtering similar to old API.
+  List<MonthlyCategory> categoriesFor(String monthKey,
+      {String? type, String? parentId}) {
+    final list = _catCache[monthKey] ?? <MonthlyCategory>[];
+    if (parentId != null) {
+      final parent = list.firstWhereOrNull((c) => c.id == parentId);
+      if (parent == null) return <MonthlyCategory>[];
+      return parent.subs
+          .map((s) => MonthlyCategory(
+                id: s.id,
+                name: s.name,
+                kind: parent.kind,
+                subs: const [],
+                parentId: parentId,
+              ))
+          .toList();
+    }
+    return list
+        .where((c) => type == null || c.kind.name == type)
+        .toList();
+  }
+
+  Future<void> addCategory({
+    required String monthKey,
+    required String name,
     required String type, // 'income' | 'expense'
     String? parentId,
   }) async {
-    final c = MonthlyCategory(
-      id: _uuid.v4(),
+    final list = await categories(monthKey);
+    if (parentId != null) {
+      final next = list.map((c) {
+        if (c.id == parentId) {
+          return c.copyWith(
+              subs: [...c.subs, MonthlySubCategory(
+                id: 'sub-\${DateTime.now().microsecondsSinceEpoch}',
+                name: name.trim(),
+              )]);
+        }
+        return c;
+      }).toList();
+      _catCache[monthKey] = next;
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_catKey(monthKey),
+          jsonEncode(next.map((e) => e.toJson()).toList()));
+      return;
+    }
+
+    final cat = MonthlyCategory(
+      id: 'cat-\${DateTime.now().microsecondsSinceEpoch}',
       name: name.trim(),
-      monthKey: monthKey,
-      type: type,
-      parentId: parentId,
+      kind: MonthlyKind.values.firstWhere((k) => k.name == type,
+          orElse: () => MonthlyKind.expense),
+      subs: const [],
     );
-    await _catBox.put(c.id, c);
-    return c;
-  }
-
-  Future<void> renameCategory(String id, String newName) async {
-    final c = _catBox.get(id);
-    if (c == null) return;
-    c.name = newName.trim();
-    await c.save();
-  }
-
-  Future<void> deleteCategory(String id) async {
-    // also delete its sub-categories + orphan txns
-    final subs =
-        _catBox.values.where((x) => x.parentId == id).map((x) => x.id).toSet();
-    await _catBox.deleteAll(subs);
-    await _txnBox.deleteAll(_txnBox.values
-        .where((t) => t.categoryId == id || subs.contains(t.categoryId))
-        .map((t) => t.id));
-    await _catBox.delete(id);
-  }
-
-  List<MonthlyCategory> categoriesFor(String monthKey,
-      {String? type, String? parentId}) {
-    return _catBox.values
-        .where((c) =>
-            c.monthKey == monthKey &&
-            (type == null || c.type == type) &&
-            (parentId == c.parentId))
-        .toList()
-      ..sort((a, b) =>
-          a.name.toLowerCase().compareTo(b.name.toLowerCase()));
-  }
-
-  // 👇 NEW: Transactions
-  Future<MonthlyTxn> addTxn({
-    required String monthKey,
-    required String categoryId,
-    required double amount,
-    required String currency,
-    String note = '',
-    DateTime? date,
-    required String type, // 'income' | 'expense'
-  }) async {
-    final t = MonthlyTxn(
-      id: _uuid.v4(),
-      monthKey: monthKey,
-      categoryId: categoryId,
-      amount: amount,
-      currency: currency,
-      note: note,
-      date: date ?? DateTime.now(),
-      type: type,
+    final next = [...list, cat];
+    _catCache[monthKey] = next;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _catKey(monthKey),
+      jsonEncode(next.map((e) => e.toJson()).toList()),
     );
-    await _txnBox.put(t.id, t);
-    return t;
-  }
-
-  Future<void> deleteTxn(String id) async => _txnBox.delete(id);
-
-  List<MonthlyTxn> txnsFor(String monthKey) {
-    final list = _txnBox.values
-        .where((t) => t.monthKey == monthKey)
-        .toList()
-      ..sort((a, b) => b.date.compareTo(a.date));
-    return list;
   }
 }
-// ===== monthly_store.dart — END =====
