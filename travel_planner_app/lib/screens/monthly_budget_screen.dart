@@ -261,12 +261,18 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
                       if (incomeCats.isNotEmpty)
                         Text('Income', style: Theme.of(context).textTheme.labelLarge),
                       for (final c in incomeCats)
-                        _CategoryTile(category: c, monthKey: _monthKey),
+                        _CategoryTile(
+                            category: c,
+                            monthKey: _monthKey,
+                            sectionType: 'income'),
                       const SizedBox(height: 8),
                       if (expenseCats.isNotEmpty)
                         Text('Expenses', style: Theme.of(context).textTheme.labelLarge),
                       for (final c in expenseCats)
-                        _CategoryTile(category: c, monthKey: _monthKey),
+                        _CategoryTile(
+                            category: c,
+                            monthKey: _monthKey,
+                            sectionType: 'expense'),
                       const SizedBox(height: 16),
                       Text('Recent transactions', style: Theme.of(context).textTheme.titleSmall),
                       const SizedBox(height: 8),
@@ -423,12 +429,18 @@ class _BudgetRow extends StatelessWidget {
 class _CategoryTile extends StatelessWidget {
   final MonthlyCategory category;
   final String monthKey;
-  const _CategoryTile({required this.category, required this.monthKey});
+  final String sectionType;
+
+  const _CategoryTile({
+    required this.category,
+    required this.monthKey,
+    required this.sectionType,
+  });
 
   @override
   Widget build(BuildContext context) {
     final subs = MonthlyStore.instance
-        .categoriesFor(monthKey, type: category.type, parentId: category.id);
+        .categoriesFor(monthKey, type: sectionType, parentId: category.id);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -444,7 +456,7 @@ class _CategoryTile extends StatelessWidget {
                 context: context,
                 isScrollControlled: true,
                 builder: (_) => CategoryEditorSheet(
-                    monthKey: monthKey, type: category.type, parent: category),
+                    monthKey: monthKey, type: sectionType, parent: category),
               );
               (context as Element).markNeedsBuild();
             },

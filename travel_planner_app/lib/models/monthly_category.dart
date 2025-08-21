@@ -93,4 +93,13 @@ class MonthlyCategory {
         if (parentId != null) 'parentId': parentId,
       };
 }
+
+// 👇 NEW: MonthlyCategory.type — optional convenience
+extension MonthlyCategoryType on MonthlyCategory {
+  String get type {
+    final n = (name).toLowerCase();
+    if (n.contains('salary') || n.contains('income')) return 'income';
+    return 'expense';
+  }
+}
 // ===== monthly_category.dart — END =====
