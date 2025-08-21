@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:collection/collection.dart';
+import 'package:hive/hive.dart';
 
 import '../models/monthly_txn.dart';
 import '../models/monthly_category.dart';
@@ -20,6 +21,13 @@ class MonthlyStore {
   // Storage keys
   static String _txKey(String monthKey)   => 'monthly_txns_v1_\$monthKey';
   static String _catKey(String monthKey)  => 'monthly_cats_v1_\$monthKey';
+
+  /// Initialize local Hive storage boxes for monthly data.
+  Future<void> init() async {
+    await Hive.openBox('monthly_budgets');
+    await Hive.openBox('monthly_categories');
+    await Hive.openBox('monthly_txns');
+  }
 
   // ---------- Transactions ----------
   /// STATIC: used by ApiService.fetchMonthlySummary(...)
