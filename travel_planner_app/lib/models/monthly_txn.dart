@@ -1,52 +1,46 @@
-// models/monthly_txn.dart
-// ▷ MonthlyTxn model start
-enum MonthlyTxnKind { income, expense }
+// ===== monthly_txn.dart — START =====
+// Description: Hive model for Monthly Transactions (salary & expenses) tracked per month.
+// TypeId: pick a free one; example: 42.
 
-class MonthlyTxn {
-  final String id;
-  final String monthKey;        // "2025-08"
-  final MonthlyTxnKind kind;    // income | expense
-  final String currency;        // ISO 4217
-  final double amount;
-  final DateTime date;
-  final String? categoryId;     // from CategoryStore (root)
-  final String? subcategoryId;  // optional sub
-  final String? note;
+import 'package:hive/hive.dart';
+
+part 'monthly_txn.g.dart';
+
+@HiveType(typeId: 42)
+class MonthlyTxn extends HiveObject {
+  @HiveField(0)
+  String id; // uuid
+
+  @HiveField(1)
+  String monthKey; // 'YYYY-MM'
+
+  @HiveField(2)
+  String categoryId; // link to MonthlyCategory (can be sub-category)
+
+  @HiveField(3)
+  double amount;
+
+  @HiveField(4)
+  String currency; // store entered currency
+
+  @HiveField(5)
+  String note;
+
+  @HiveField(6)
+  DateTime date;
+
+  @HiveField(7)
+  String type; // 'income' | 'expense' (redundant but handy for queries)
 
   MonthlyTxn({
     required this.id,
     required this.monthKey,
-    required this.kind,
-    required this.currency,
+    required this.categoryId,
     required this.amount,
+    required this.currency,
+    required this.note,
     required this.date,
-    this.categoryId,
-    this.subcategoryId,
-    this.note,
+    required this.type,
   });
-
-  factory MonthlyTxn.fromJson(Map<String, dynamic> j) => MonthlyTxn(
-        id: j['id'],
-        monthKey: j['monthKey'],
-        kind: (j['kind'] == 'income') ? MonthlyTxnKind.income : MonthlyTxnKind.expense,
-        currency: j['currency'],
-        amount: (j['amount'] as num).toDouble(),
-        date: DateTime.parse(j['date']),
-        categoryId: j['categoryId'],
-        subcategoryId: j['subcategoryId'],
-        note: j['note'],
-      );
-
-  Map<String, dynamic> toJson() => {
-        'id': id,
-        'monthKey': monthKey,
-        'kind': kind == MonthlyTxnKind.income ? 'income' : 'expense',
-        'currency': currency,
-        'amount': amount,
-        'date': date.toIso8601String(),
-        'categoryId': categoryId,
-        'subcategoryId': subcategoryId,
-        'note': note,
-      };
 }
-// ◀ MonthlyTxn model end
+// ===== monthly_txn.dart — END =====

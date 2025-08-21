@@ -6,6 +6,7 @@ import 'screens/app_shell.dart';
 import 'services/api_service.dart';
 import 'services/trip_storage_service.dart';
 import 'services/hive_migrations.dart';
+import 'services/monthly_store.dart';
 
 
 Future<void> main() async {
@@ -19,6 +20,8 @@ Future<void> main() async {
   await Hive.deleteBoxFromDisk('expensesBox');
   await Hive.openBox<Expense>('expensesBox');
   await HiveMigrations.backfillExpenseCurrency();
+  // 👇 NEW: Monthly store init (place next to your other Hive inits)
+  await MonthlyStore.instance.init();
   // Trip storage init
   await TripStorageService.init();
 
