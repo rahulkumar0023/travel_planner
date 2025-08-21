@@ -1,8 +1,10 @@
+// auth imports start
 import 'dart:convert';
-
-import 'package:flutter/foundation.dart'; // ← make sure you have this model
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+// auth imports end
+
+import 'package:flutter/foundation.dart'; // ← make sure you have this model
 
 import '../models/balance_row.dart';
 import '../models/budget.dart';
@@ -35,17 +37,28 @@ class ApiService {
 
   ApiService({required this.baseUrl});
 
-  // 👇 NEW: read token from prefs
+  // 👇 NEW: safe URL joiner — replaces '$baseUrl/...'
+  // _u join start
+  String _u(String path) {
+    final b = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final p = path.startsWith('/') ? path.substring(1) : path;
+    return '$b/$p';
+    }
+  // _u join end
+
+  // 👇 NEW: attach Authorization: Bearer <token>
+  // _authHeaders start
   Future<Map<String, String>> _authHeaders() async {
     final p = await SharedPreferences.getInstance();
-    final t = p.getString('api_jwt') ?? '';
+    final jwt = p.getString('api_jwt') ?? '';
     final h = <String, String>{'Content-Type': 'application/json'};
-    if (t.isNotEmpty) h['Authorization'] = 'Bearer $t';
+    if (jwt.isNotEmpty) h['Authorization'] = 'Bearer $jwt';
     return h;
   }
+  // _authHeaders end
 
   // public helper for outbox
-  Uri urlFor(String path) => Uri.parse('$baseUrl$path');
+  Uri urlFor(String path) => Uri.parse(_u(path));
 
   // expose headers for outbox
   Future<Map<String, String>> headers(bool json) => _authHeaders();
@@ -53,7 +66,7 @@ class ApiService {
   // Debug: verify backend sees our JWT
   Future<Map<String, dynamic>> whoAmI() async {
     final headers = await _authHeaders();
-    final res = await http.get(Uri.parse('$baseUrl/auth/me'), headers: headers);
+    final res = await http.get(Uri.parse(_u('auth/me')), headers: headers);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
@@ -61,7 +74,7 @@ class ApiService {
   // Trips
   // -----------------------------
   Future<List<Trip>> fetchTrips() async {
-    final res = await http.get(Uri.parse('$baseUrl/trips'), headers: await _authHeaders());
+    final res = await http.get(Uri.parse(_u('trips')), headers: await _authHeaders());
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
       return data.map((e) => Trip.fromJson(e)).toList();
@@ -84,7 +97,7 @@ class ApiService {
 
   Future<Trip> createTrip(Trip t) async {
     final res = await http.post(
-      Uri.parse('$baseUrl/trips'),
+      Uri.parse(_u('trips')),
       headers: await _authHeaders(),
       body: jsonEncode(t.toJson()),
     );
@@ -97,7 +110,7 @@ class ApiService {
 
   Future<Trip> updateTrip(Trip t) async {
     final res = await http.put(
-      Uri.parse('$baseUrl/trips/${t.id}'),
+      Uri.parse(_u('trips/${t.id}')),
       headers: await _authHeaders(),
       body: jsonEncode(t.toJson()),
     );
@@ -108,7 +121,7 @@ class ApiService {
   }
 
   Future<void> deleteTrip(String id) async {
-    final res = await http.delete(Uri.parse('$baseUrl/trips/$id'), headers: await _authHeaders());
+    final res = await http.delete(Uri.parse(_u('trips/$id')), headers: await _authHeaders());
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete trip (${res.statusCode}) ${res.body}');
     }
@@ -119,7 +132,7 @@ class ApiService {
   // -----------------------------
   Future<List<Expense>> fetchExpenses(String tripId) async {
     final res = await http.get(
-      Uri.parse('$baseUrl/expenses/$tripId'),
+      Uri.parse(_u('expenses/$tripId')),
       headers: await _authHeaders(),
     );
     if (res.statusCode == 200) {
@@ -131,7 +144,7 @@ class ApiService {
 
   Future<void> addExpense(Expense e) async {
     final res = await http.post(
-      Uri.parse('$baseUrl/expenses'),
+      Uri.parse(_u('expenses')),
       headers: await _authHeaders(),
       body: jsonEncode(e.toJson()),
     );
@@ -141,7 +154,7 @@ class ApiService {
   }
 
   Future<Expense> updateExpense(Expense e) async {
-    final uri = Uri.parse('$baseUrl/expenses/${e.id}');
+    final uri = Uri.parse(_u('expenses/${e.id}'));
     final res = await http.put(uri, headers: await _authHeaders(), body: jsonEncode(e.toJson()));
     if (res.statusCode != 200) {
       throw Exception('Failed to update expense (${res.statusCode}) ${res.body}');
@@ -151,7 +164,7 @@ class ApiService {
 
 
   Future<void> deleteExpense(String id) async {
-    final res = await http.delete(Uri.parse('$baseUrl/expenses/$id'), headers: await _authHeaders());
+    final res = await http.delete(Uri.parse(_u('expenses/$id')), headers: await _authHeaders());
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
     }
@@ -164,12 +177,12 @@ class ApiService {
   Future<List<BalanceRow>> fetchGroupBalances(String tripId) async {
     // Prefer /balances/{tripId}; fallback to legacy /expenses/split/{tripId}
     var res = await http.get(
-      Uri.parse('$baseUrl/balances/$tripId'),
+      Uri.parse(_u('balances/$tripId')),
       headers: await _authHeaders(),
     );
     if (res.statusCode == 404) {
       res = await http.get(
-        Uri.parse('$baseUrl/expenses/split/$tripId'),
+        Uri.parse(_u('expenses/split/$tripId')),
         headers: await _authHeaders(),
       );
     }
@@ -200,7 +213,7 @@ class ApiService {
     };
 
     var res = await http.post(
-      Uri.parse('$baseUrl/balances/settle'),
+      Uri.parse(_u('balances/settle')),
       headers: await _authHeaders(),
       body: jsonEncode(payload),
     );
@@ -208,7 +221,7 @@ class ApiService {
     // Fallback: legacy/alternate endpoint
     if (res.statusCode == 404) {
       res = await http.post(
-        Uri.parse('$baseUrl/settlements'),
+        Uri.parse(_u('settlements')),
         headers: await _authHeaders(),
         body: jsonEncode(payload),
       );
@@ -273,7 +286,7 @@ class ApiService {
   }) async {
     // This is essentially your current convert() logic without caching.
     if (amount == 0 || from.toUpperCase() == to.toUpperCase()) return amount;
-    final uri = Uri.parse('$baseUrl/currency/convert').replace(
+    final uri = Uri.parse(_u('currency/convert')).replace(
       queryParameters: {
         'from': from.toUpperCase(),
         'to': to.toUpperCase(),
@@ -317,7 +330,7 @@ class ApiService {
   // -----------------------------
   Future<List<Budget>> fetchBudgets() async {
     final res = await http.get(
-      Uri.parse('$baseUrl/budgets'),
+      Uri.parse(_u('budgets')),
       headers: await _authHeaders(),
     );
     if (res.statusCode == 404) return <Budget>[]; // backend not ready yet
@@ -368,12 +381,12 @@ class ApiService {
 
     // Try common REST variants in order
     final endpoints = <String>[
-      '$baseUrl/budgets',
-      if (kind == BudgetKind.monthly) '$baseUrl/budgets/monthly' else '$baseUrl/budgets/trip',
-      '$baseUrl/budget',
-      if (kind == BudgetKind.monthly) '$baseUrl/budget/monthly' else '$baseUrl/budget/trip',
-      '$baseUrl/api/budgets',
-      if (kind == BudgetKind.monthly) '$baseUrl/api/budgets/monthly' else '$baseUrl/api/budgets/trip',
+      _u('budgets'),
+      if (kind == BudgetKind.monthly) _u('budgets/monthly') else _u('budgets/trip'),
+      _u('budget'),
+      if (kind == BudgetKind.monthly) _u('budget/monthly') else _u('budget/trip'),
+      _u('api/budgets'),
+      if (kind == BudgetKind.monthly) _u('api/budgets/monthly') else _u('api/budgets/trip'),
     ];
 
     Exception? lastError;
@@ -463,10 +476,10 @@ class ApiService {
     };
 
     final endpoints = <({String method, String url})>[
-      (method: 'PUT', url: '$baseUrl/budgets/$id'),
-      (method: 'PATCH', url: '$baseUrl/budgets/$id'),
-      (method: 'POST', url: '$baseUrl/budgets/$id'), // some APIs accept POST for update
-      (method: 'PUT', url: '$baseUrl/budget/$id'),
+      (method: 'PUT', url: _u('budgets/$id')),
+      (method: 'PATCH', url: _u('budgets/$id')),
+      (method: 'POST', url: _u('budgets/$id')), // some APIs accept POST for update
+      (method: 'PUT', url: _u('budget/$id')),
     ];
 
     Exception? lastError;
@@ -518,9 +531,9 @@ class ApiService {
   // delete Budget start
   Future<void> deleteBudget(String id) async {
     final attempts = <({String method, String url})>[
-      (method: 'DELETE', url: '$baseUrl/budgets/$id'),
-      (method: 'POST', url: '$baseUrl/budgets/$id/delete'),
-      (method: 'DELETE', url: '$baseUrl/budget/$id'),
+      (method: 'DELETE', url: _u('budgets/$id')),
+      (method: 'POST', url: _u('budgets/$id/delete')),
+      (method: 'DELETE', url: _u('budget/$id')),
     ];
     Exception? lastError;
     for (final a in attempts) {
@@ -555,14 +568,14 @@ class ApiService {
     required String monthlyBudgetId,
   }) async {
     final res = await http.post(
-      Uri.parse('$baseUrl/budgets/$tripBudgetId/link'),
+      Uri.parse(_u('budgets/$tripBudgetId/link')),
       headers: await _authHeaders(),
       body: jsonEncode({'monthlyBudgetId': monthlyBudgetId}),
     );
     if (res.statusCode == 404) {
       // Alternate legacy endpoint
       final res2 = await http.post(
-        Uri.parse('$baseUrl/budget-links'),
+        Uri.parse(_u('budget-links')),
         headers: await _authHeaders(),
         body: jsonEncode({
           'tripBudgetId': tripBudgetId,
@@ -584,13 +597,13 @@ class ApiService {
   Future<void> unlinkTripBudget({required String tripBudgetId}) async {
     // Preferred endpoint
     var res = await http.post(
-      Uri.parse('$baseUrl/budgets/$tripBudgetId/unlink'),
+      Uri.parse(_u('budgets/$tripBudgetId/unlink')),
       headers: await _authHeaders(),
     );
     if (res.statusCode == 404) {
       // Legacy fallback: delete the link row by trip id
       res = await http.delete(
-        Uri.parse('$baseUrl/budget-links/$tripBudgetId'),
+        Uri.parse(_u('budget-links/$tripBudgetId')),
         headers: await _authHeaders(),
       );
     }

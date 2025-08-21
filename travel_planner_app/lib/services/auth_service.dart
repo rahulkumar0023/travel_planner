@@ -9,6 +9,13 @@ class AuthService {
   AuthService({required this.baseUrl});
 
   final String baseUrl;
+
+  String _u(String path) {
+    final b = baseUrl.endsWith('/') ? baseUrl.substring(0, baseUrl.length - 1) : baseUrl;
+    final p = path.startsWith('/') ? path.substring(1) : path;
+    return '$b/$p';
+  }
+
   final GoogleSignIn _google = GoogleSignIn(scopes: ['email', 'profile']);
 
   Future<String?> signInWithGoogleIdToken() async {
@@ -35,7 +42,7 @@ class AuthService {
     required String provider, // 'google' | 'apple'
     required String idToken,
   }) async {
-    final url = Uri.parse('$baseUrl/auth/exchange');
+    final url = Uri.parse(_u('auth/exchange'));
     final res = await http.post(
       url,
       headers: {'Content-Type': 'application/json'},
