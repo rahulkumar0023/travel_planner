@@ -24,18 +24,34 @@ class TripSelectionScreen extends StatefulWidget {
 }
 
 class _TripSelectionScreenState extends State<TripSelectionScreen> {
-  late Future<List<Trip>> _future;
+  Future<List<Trip>> _future = Future.value(<Trip>[]);
   bool _showArchived = false;
   Set<String> _archived = <String>{};
 
   @override
   void initState() {
     super.initState();
-    _future = widget.api.fetchTripsOrCache();
-    ArchivedTripsStore.all().then((ids) {
-      if (!mounted) return;
-      setState(() => _archived = ids);
-    });
+    () async {
+      try {
+        await widget.api.waitForToken();
+        final fut = widget.api.fetchTripsOrCache();
+        if (mounted) {
+          setState(() {
+            _future = fut;
+          });
+          ArchivedTripsStore.all().then((ids) {
+            if (!mounted) return;
+            setState(() => _archived = ids);
+          });
+        }
+      } catch (e) {
+        if (mounted) {
+          setState(() {
+            _future = Future.error(e);
+          });
+        }
+      }
+    }();
   }
 
 // _refresh method start

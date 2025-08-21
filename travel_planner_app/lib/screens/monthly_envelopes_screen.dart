@@ -41,6 +41,7 @@ class _MonthlyEnvelopesScreenState extends State<MonthlyEnvelopesScreen> {
 
   Future<void> _load() async {
     setState(() => _loading = true);
+    await widget.api.waitForToken();
     final budgets = await widget.api.fetchBudgetsOrCache();
     _allBudgets = budgets;
 

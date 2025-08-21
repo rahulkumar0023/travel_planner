@@ -23,7 +23,7 @@ class GroupBalanceScreen extends StatefulWidget {
 }
 
 class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
-  late Future<List<BalanceRow>> _future;
+  Future<List<BalanceRow>> _future = Future.value(<BalanceRow>[]);
   List<BalanceRow> _rows = [];
 
   @override
@@ -33,6 +33,7 @@ class _GroupBalanceScreenState extends State<GroupBalanceScreen> {
   }
 
   Future<List<BalanceRow>> _load() async {
+    await widget.api.waitForToken();
     final rows = await widget.api.fetchGroupBalances(widget.tripId);
     _rows = rows;
     return rows;
