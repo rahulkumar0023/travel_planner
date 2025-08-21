@@ -159,4 +159,58 @@ class MonthlyStore {
       jsonEncode(next.map((e) => e.toJson()).toList()),
     );
   }
+
+  // cloneMonth start
+  Future<void> cloneMonth({
+    required String fromMonthKey,
+    required String toMonthKey,
+  }) async {
+    final existingRoots =
+        categoriesFor(toMonthKey, parentId: null).map((c) => c.name.trim().toLowerCase()).toSet();
+
+    // Copy Income roots
+    final incomeRoots =
+        categoriesFor(fromMonthKey, type: 'income', parentId: null);
+    for (final r in incomeRoots) {
+      final key = r.name.trim().toLowerCase();
+      if (existingRoots.contains(key)) continue;
+      await addCategory(name: r.name, monthKey: toMonthKey, type: 'income');
+      existingRoots.add(key);
+      final newRoot = categoriesFor(toMonthKey, type: 'income', parentId: null)
+          .firstWhere((c) => c.name.trim().toLowerCase() == key);
+      final subs =
+          categoriesFor(fromMonthKey, type: 'income', parentId: r.id);
+      for (final s in subs) {
+        await addCategory(
+          name: s.name,
+          monthKey: toMonthKey,
+          type: 'income',
+          parentId: newRoot.id,
+        );
+      }
+    }
+
+    // Copy Expense roots
+    final expenseRoots =
+        categoriesFor(fromMonthKey, type: 'expense', parentId: null);
+    for (final r in expenseRoots) {
+      final key = r.name.trim().toLowerCase();
+      if (existingRoots.contains(key)) continue;
+      await addCategory(name: r.name, monthKey: toMonthKey, type: 'expense');
+      existingRoots.add(key);
+      final newRoot = categoriesFor(toMonthKey, type: 'expense', parentId: null)
+          .firstWhere((c) => c.name.trim().toLowerCase() == key);
+      final subs =
+          categoriesFor(fromMonthKey, type: 'expense', parentId: r.id);
+      for (final s in subs) {
+        await addCategory(
+          name: s.name,
+          monthKey: toMonthKey,
+          type: 'expense',
+          parentId: newRoot.id,
+        );
+      }
+    }
+  }
+  // cloneMonth end
 }
