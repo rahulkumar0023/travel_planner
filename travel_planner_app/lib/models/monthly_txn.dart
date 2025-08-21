@@ -24,6 +24,11 @@ class MonthlyTxn {
     required this.date,
   });
 
+  // Backwards-compatibility getter for UI code expecting a `type` string.
+  // Maps the `MonthlyTxnKind` enum to 'income' or 'expense'.
+  String get type =>
+      kind == MonthlyTxnKind.income ? 'income' : 'expense';
+
   factory MonthlyTxn.fromJson(Map<String, dynamic> json) => MonthlyTxn(
         id: json['id'] as String,
         kind: MonthlyTxnKind.values.firstWhere(
