@@ -8,6 +8,17 @@ class MonthlySubCategory {
   final String name;
   final double planned;
 
+
+  // 👇 add here
+  String get type {
+    if (name.toLowerCase().contains('salary') ||
+        name.toLowerCase().contains('income')) {
+      return 'income';
+    }
+    return 'expense';
+  }
+
+
   MonthlySubCategory({required this.id, required this.name, this.planned = 0.0});
 
   factory MonthlySubCategory.fromJson(Map<String, dynamic> json) =>
