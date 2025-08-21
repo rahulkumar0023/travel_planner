@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../services/api_service.dart';
 // 👇 NEW: Monthly view-models for this screen
 import '../models/monthly.dart';
+import '../models/budget.dart'; // for BudgetKind
 
 class MonthlyBudgetScreen extends StatefulWidget {
   final ApiService api;
@@ -44,6 +45,93 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     }
   }
 
+  String _monthName(int m) =>
+      const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1];
+
+  Future<void> _openAddMenu() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (_) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.category_outlined),
+              title: const Text('Add monthly envelope'),
+              subtitle: Text('${_monthName(_month.month)} ${_month.year}'),
+              onTap: () => Navigator.pop(context, 'envelope'),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (choice == 'envelope') {
+      await _createEnvelopeDialog(); // do the async work first…
+      if (!mounted) return;
+      setState(_load); // …then refresh synchronously
+    }
+  }
+
+  Future<void> _createEnvelopeDialog() async {
+    final name = TextEditingController();
+    final amount = TextEditingController();
+    final currency = TextEditingController(text: 'EUR');
+
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('New Monthly Envelope'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(controller: name, decoration: const InputDecoration(labelText: 'Name')),
+            const SizedBox(height: 8),
+            TextField(
+              controller: amount,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(labelText: 'Budgeted amount'),
+            ),
+            const SizedBox(height: 8),
+            TextField(
+              controller: currency,
+              textCapitalization: TextCapitalization.characters,
+              decoration: const InputDecoration(labelText: 'Currency (e.g. EUR)'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create')),
+        ],
+      ),
+    );
+
+    if (ok != true) return;
+
+    // Perform async work OUTSIDE setState
+    try {
+      await widget.api.createBudget(
+        kind: BudgetKind.monthly,
+        currency: currency.text.trim().toUpperCase(),
+        amount: double.tryParse(amount.text.trim()) ?? 0,
+        year: _month.year,
+        month: _month.month,
+        name: name.text.trim().isEmpty ? null : name.text.trim(),
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Envelope created')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not create: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -56,6 +144,11 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
             onPressed: _pickMonth,
           ),
         ],
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _openAddMenu,
+        icon: const Icon(Icons.add),
+        label: const Text('Add'),
       ),
       body: FutureBuilder(
         future: Future.wait([_summaryFut, _budgetsFut]),
@@ -157,7 +250,8 @@ class _BudgetRow extends StatelessWidget {
               ),
               IconButton(
                 icon: const Icon(Icons.add_circle_outline),
-                onPressed: () {/* TODO: Quick add to this envelope */},
+                onPressed: () => ScaffoldMessenger.of(context)
+                    .showSnackBar(const SnackBar(content: Text('Coming soon: add sub-budget/expense'))),
                 tooltip: 'Add',
               ),
             ],
