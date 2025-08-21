@@ -50,6 +50,13 @@ class ApiService {
   // expose headers for outbox
   Future<Map<String, String>> headers(bool json) => _authHeaders();
 
+  // Debug: verify backend sees our JWT
+  Future<Map<String, dynamic>> whoAmI() async {
+    final headers = await _authHeaders();
+    final res = await http.get(Uri.parse('$baseUrl/auth/me'), headers: headers);
+    return jsonDecode(res.body) as Map<String, dynamic>;
+  }
+
   // -----------------------------
   // Trips
   // -----------------------------
