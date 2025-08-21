@@ -7,6 +7,9 @@ import '../services/budgets_sync.dart';
 import '../services/archived_trips_store.dart';
 import '../services/outbox_service.dart';
 import 'monthly_budget_screen.dart';
+// budget detail import start
+import 'monthly/budget_detail_screen.dart';
+// budget detail import end
 
 class BudgetsScreen extends StatefulWidget {
   const BudgetsScreen({super.key, required this.api});
@@ -633,56 +636,76 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
               for (final m in monthly)
                 FutureBuilder<double>(
                   future: _approx(m.currency, m.amount),
-                  builder: (_, approx) => Card(
-                    child: ListTile(
-                      title: Text(
-                        (m.name?.isNotEmpty == true)
-                            ? '${m.name} • ${m.amount.toStringAsFixed(0)} ${m.currency}'
-                            : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
-                      ),
-                      subtitle: FutureBuilder<double>(
-                        future: () async {
-                          double s = 0.0;
-                          final linkedTrips = trips.where((tb) => tb.linkedMonthlyBudgetId == m.id);
-                          for (final tb in linkedTrips) {
-                            final tripSpentInTripCcy = _spentByTrip[tb.tripId ?? ''] ?? 0.0;
-                            if (tripSpentInTripCcy == 0) continue;
+                  builder: (_, approx) =>
+                      // envelope tap start
+                      InkWell(
+                        onTap: () {
+                          Navigator.of(context).push(MaterialPageRoute(
+                            builder: (_) => BudgetDetailScreen(
+                              budgetId: m.id,
+                              budgetName: m.name ?? '${m.month}/${m.year}',
+                              currency: m.currency,
+                              month: DateTime(
+                                  m.year ?? DateTime.now().year,
+                                  m.month ?? DateTime.now().month,
+                                  1),
+                            ),
+                          ));
+                        },
+                        child: Card(
+                          child: ListTile(
+                            title: Text(
+                              (m.name?.isNotEmpty == true)
+                                  ? '${m.name} • ${m.amount.toStringAsFixed(0)} ${m.currency}'
+                                  : '${m.year}-${m.month?.toString().padLeft(2, '0')} • ${m.amount.toStringAsFixed(0)} ${m.currency}',
+                            ),
+                            subtitle: FutureBuilder<double>(
+                              future: () async {
+                                double s = 0.0;
+                                final linkedTrips =
+                                    trips.where((tb) => tb.linkedMonthlyBudgetId == m.id);
+                                for (final tb in linkedTrips) {
+                                  final tripSpentInTripCcy =
+                                      _spentByTrip[tb.tripId ?? ''] ?? 0.0;
+                                  if (tripSpentInTripCcy == 0) continue;
 
-                            // convert each trip's spent → monthly currency
-                            final add = await widget.api.convert(
-                              amount: tripSpentInTripCcy,
-                              from: tb.currency.toUpperCase(),
-                              to: m.currency.toUpperCase(),
-                            );
-                            s += add;
-                          }
-                          return s;
-                        }(),
-                        builder: (_, snap) {
-                          final spent = (snap.data ?? 0.0);
-                          final remaining = (m.amount) - spent;
-                          return Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Total: ${_money(m.currency, m.amount, dp: 2)}'),
-                              Text('Spent: ${_money(m.currency, spent, dp: 2)}'),
-                              Text('Remaining: ${_money(m.currency, remaining, dp: 2)}'),
-                            ],
-                          );
-                        },
+                                  // convert each trip's spent → monthly currency
+                                  final add = await widget.api.convert(
+                                    amount: tripSpentInTripCcy,
+                                    from: tb.currency.toUpperCase(),
+                                    to: m.currency.toUpperCase(),
+                                  );
+                                  s += add;
+                                }
+                                return s;
+                              }(),
+                              builder: (_, snap) {
+                                final spent = (snap.data ?? 0.0);
+                                final remaining = (m.amount) - spent;
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text('Total: ${_money(m.currency, m.amount, dp: 2)}'),
+                                    Text('Spent: ${_money(m.currency, spent, dp: 2)}'),
+                                    Text('Remaining: ${_money(m.currency, remaining, dp: 2)}'),
+                                  ],
+                                );
+                              },
+                            ),
+                            trailing: PopupMenuButton<String>(
+                              onSelected: (v) {
+                                if (v == 'edit') _editMonthly(m);
+                                if (v == 'delete') _deleteBudget(m);
+                              },
+                              itemBuilder: (_) => const [
+                                PopupMenuItem(value: 'edit', child: Text('Edit')),
+                                PopupMenuItem(value: 'delete', child: Text('Delete')),
+                              ],
+                            ),
+                          ),
+                        ),
                       ),
-                      trailing: PopupMenuButton<String>(
-                        onSelected: (v) {
-                          if (v == 'edit') _editMonthly(m);
-                          if (v == 'delete') _deleteBudget(m);
-                        },
-                        itemBuilder: (_) => const [
-                          PopupMenuItem(value: 'edit', child: Text('Edit')),
-                          PopupMenuItem(value: 'delete', child: Text('Delete')),
-                        ],
-                      ),
-                    ),
-                  ),
+                      // envelope tap end
 
                 ),
               const SizedBox(height: 16),
