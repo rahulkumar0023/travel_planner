@@ -40,7 +40,7 @@ class _TxnEditorSheetState extends State<TxnEditorSheet> {
       currency: _currency,
       note: _noteCtrl.text.trim(),
       date: _date,
-      type: widget.type,
+      kind: widget.type,
     );
     if (mounted) Navigator.pop(context, true);
   }

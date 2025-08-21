@@ -71,19 +71,23 @@ class MonthlyStore {
   /// Add/Upsert a monthly transaction (income or expense)
   Future<void> addTxn({
     required String monthKey,
-    required MonthlyTxnKind kind, // income | expense
     required String currency,
     required double amount,
     String? categoryId,
     String? subCategoryId,
     String? note,
     DateTime? date,
+    required String kind, // 'income' | 'expense'
   }) async {
     final now = date ?? DateTime.now();
     final list = await MonthlyStore.all(monthKey);
+    final kindEnum = (kind.toLowerCase() == 'income')
+        ? MonthlyTxnKind.income
+        : MonthlyTxnKind.expense;
+
     final item = MonthlyTxn(
       id: 'txn-\${now.microsecondsSinceEpoch}',
-      kind: kind,
+      kind: kindEnum,
       currency: currency.toUpperCase(),
       amount: amount,
       categoryId: categoryId,
@@ -180,10 +184,14 @@ class MonthlyStore {
       final next = list.map((c) {
         if (c.id == parentId) {
           return c.copyWith(
-              subs: [...c.subs, MonthlySubCategory(
-                id: 'sub-\${DateTime.now().microsecondsSinceEpoch}',
-                name: name.trim(),
-              )]);
+              subs: [
+            ...c.subs,
+            MonthlySubCategory(
+              id: 'sub-\${DateTime.now().microsecondsSinceEpoch}',
+              name: name.trim(),
+              planned: 0.0,
+            )
+          ]);
         }
         return c;
       }).toList();
