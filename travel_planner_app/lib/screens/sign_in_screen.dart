@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
-import '../services/auth_service.dart';
+import '../services/oauth.dart';
 
 class SignInScreen extends StatefulWidget {
   const SignInScreen({super.key, required this.api});
@@ -11,22 +11,14 @@ class SignInScreen extends StatefulWidget {
 }
 
 class _SignInScreenState extends State<SignInScreen> {
-  late final AuthService _auth;
   bool _busy = false;
   String? _error;
-
-  @override
-  void initState() {
-    super.initState();
-    _auth = AuthService(baseUrl: widget.api.baseUrl);
-  }
 
   Future<void> _google() async {
     setState(() { _busy = true; _error = null; });
     try {
-      final idToken = await _auth.signInWithGoogleIdToken();
-      if (idToken == null) return;
-      await _auth.exchangeAndStoreToken(provider: 'google', idToken: idToken);
+      final idToken = await OAuthService.instance.getGoogleIdToken();
+      await widget.api.loginWithIdToken(idToken: idToken, provider: 'google');
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = '$e');
@@ -38,11 +30,8 @@ class _SignInScreenState extends State<SignInScreen> {
   Future<void> _apple() async {
     setState(() { _busy = true; _error = null; });
     try {
-      final res = await _auth.signInWithApple();
-      if (res == null) return;
-      final token = res.idToken ?? res.authCode;
-      if (token == null) throw Exception('Auth token missing');
-      await _auth.exchangeAndStoreToken(provider: 'apple', idToken: token);
+      final idToken = await OAuthService.instance.getAppleIdentityToken();
+      await widget.api.loginWithIdToken(idToken: idToken, provider: 'apple');
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
       setState(() => _error = '$e');
