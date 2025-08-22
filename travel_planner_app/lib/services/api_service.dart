@@ -85,6 +85,34 @@ class ApiService {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  // 👇 NEW: exchange provider ID token for API JWT
+  // loginWithIdToken start
+  Future<void> loginWithIdToken({
+    required String idToken,
+    required String provider,
+  }) async {
+    final url = Uri.parse(_u('auth/$provider'));
+    final res = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json'},
+      body: jsonEncode({'idToken': idToken}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Auth failed: ${res.statusCode} ${res.body}');
+    }
+    final data = jsonDecode(res.body) as Map<String, dynamic>;
+    final p = await SharedPreferences.getInstance();
+    final jwt = data['jwt'] as String?;
+    if (jwt != null) {
+      await p.setString('api_jwt', jwt);
+    }
+    final email = data['email'] as String?;
+    if (email != null) {
+      await p.setString('user_email', email);
+    }
+  }
+  // loginWithIdToken end
+
   // -----------------------------
   // Trips
   // -----------------------------
