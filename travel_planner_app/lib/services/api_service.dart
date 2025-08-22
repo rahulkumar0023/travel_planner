@@ -85,6 +85,13 @@ class ApiService {
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
+  // setAuthToken start
+  Future<void> setAuthToken(String jwt) async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('api_jwt', jwt);
+  }
+  // setAuthToken end
+
   // 👇 NEW: exchange provider ID token for API JWT
   // loginWithIdToken start
   Future<void> loginWithIdToken({
@@ -101,17 +108,35 @@ class ApiService {
       throw Exception('Auth failed: ${res.statusCode} ${res.body}');
     }
     final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final p = await SharedPreferences.getInstance();
     final jwt = data['jwt'] as String?;
-    if (jwt != null) {
-      await p.setString('api_jwt', jwt);
-    }
     final email = data['email'] as String?;
+    if (jwt != null) {
+      await setAuthToken(jwt);
+    }
     if (email != null) {
+      final p = await SharedPreferences.getInstance();
       await p.setString('user_email', email);
     }
   }
   // loginWithIdToken end
+
+  // 👇 NEW: dev login — exchange an email for a JWT (backend /auth/dev)
+  // loginDev start
+  Future<void> loginDev({required String email}) async {
+    final url = Uri.parse(_u('auth/dev'));
+    final res = await http.post(
+      url,
+      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      body: jsonEncode({'email': email}),
+    );
+    if (res.statusCode != 200) {
+      throw Exception('Dev auth failed ${res.statusCode}: ${res.body}');
+    }
+    final map = (jsonDecode(res.body) as Map<String, dynamic>);
+    final jwt = map['token'] as String;
+    await setAuthToken(jwt); // ✅ now every request will send Authorization: Bearer <jwt>
+  }
+  // loginDev end
 
   // -----------------------------
   // Trips

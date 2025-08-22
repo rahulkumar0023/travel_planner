@@ -57,6 +57,19 @@ class _SettingsScreenState extends State<SettingsScreen> {
               MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
             ),
           ),
+          const SizedBox(height: 24),
+          // dev login button start
+          ElevatedButton(
+            onPressed: () async {
+              await widget.api.loginDev(email: 'you@demo.test');
+              if (!mounted) return;
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Signed in (dev)')),
+              );
+            },
+            child: const Text('Dev Sign-in'),
+          ),
+          // dev login button end
         ],
       ),
     );
