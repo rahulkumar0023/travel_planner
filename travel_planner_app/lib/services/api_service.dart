@@ -1,10 +1,11 @@
-// auth imports start
+// api_service imports start
 import 'dart:convert';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
-// auth imports end
+// api_service imports end
 
-import 'package:flutter/foundation.dart'; // ← make sure you have this model
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/balance_row.dart';
 import '../models/budget.dart';
@@ -20,6 +21,49 @@ import 'fx_service.dart';
 import '../models/monthly_txn.dart';
 import './monthly_store.dart';
 
+// 👇 NEW: baseUrl that works on iOS/Android emulators & web
+// baseUrl start
+String get baseUrl {
+  if (kIsWeb) return 'http://localhost:8080';
+  if (Platform.isAndroid) return 'http://10.0.2.2:8080'; // Android emulator → host Mac
+  return 'http://localhost:8080'; // iOS simulator / macOS
+}
+// baseUrl end
+
+// 👇 NEW: hold JWT in memory (temp) + setter
+// jwt holder start
+String? _jwt;
+
+Future<void> setAuthToken(String? token) async {
+  _jwt = token;
+  if (_jwt != null) {
+    debugPrint('[Api] setAuthToken -> ${_jwt!.substring(0, 16)}...');
+  } else {
+    debugPrint('[Api] cleared auth token');
+  }
+  final p = await SharedPreferences.getInstance();
+  if (token != null) {
+    await p.setString('api_jwt', token);
+  } else {
+    await p.remove('api_jwt');
+  }
+}
+// jwt holder end
+
+// 👇 NEW: shared headers ensuring Authorization: Bearer <jwt>
+// _headers start
+Map<String, String> _headers({Map<String, String>? extra}) {
+  final h = <String, String>{
+    'Accept': 'application/json',
+  };
+  if (_jwt != null && _jwt!.isNotEmpty) {
+    h['Authorization'] = 'Bearer $_jwt';
+  }
+  if (extra != null) h.addAll(extra);
+  return h;
+}
+// _headers end
+
 class _FxCache {
   _FxCache(this.rate, this.ts);
 
@@ -28,14 +72,13 @@ class _FxCache {
 }
 
 class ApiService {
-  final String baseUrl;
   bool lastBudgetsFromCache = false;
   bool lastTripsFromCache = false;
 
 // --- FX cache (1h TTL) ---
   final Map<String, _FxCache> _fx = {}; // key: 'FROM_TO'
 
-  ApiService({required this.baseUrl});
+  ApiService();
 
   // 👇 NEW: safe URL joiner — replaces '$baseUrl/...'
   // _u join start
@@ -78,19 +121,17 @@ class ApiService {
   // expose headers for outbox
   Future<Map<String, String>> headers(bool json) => _authHeadersRequired();
 
-  // Debug: verify backend sees our JWT
-  Future<Map<String, dynamic>> whoAmI() async {
-    final headers = await _authHeadersRequired();
-    final res = await http.get(Uri.parse(_u('auth/me')), headers: headers);
-    return jsonDecode(res.body) as Map<String, dynamic>;
+  // 👇 NEW: who am I — GET /auth/me to verify header + show user
+  // getMe start
+  Future<Map<String, dynamic>> getMe() async {
+    final url = Uri.parse('${baseUrl}/auth/me');
+    final res = await http.get(url, headers: _headers());
+    if (res.statusCode != 200) {
+      throw Exception('GET /auth/me failed ${res.statusCode}: ${res.body}');
+    }
+    return (jsonDecode(res.body) as Map).cast<String, dynamic>();
   }
-
-  // setAuthToken start
-  Future<void> setAuthToken(String jwt) async {
-    final p = await SharedPreferences.getInstance();
-    await p.setString('api_jwt', jwt);
-  }
-  // setAuthToken end
+  // getMe end
 
   // 👇 NEW: exchange provider ID token for API JWT
   // loginWithIdToken start
@@ -120,21 +161,24 @@ class ApiService {
   }
   // loginWithIdToken end
 
-  // 👇 NEW: dev login — exchange an email for a JWT (backend /auth/dev)
+  // 👇 NEW: dev login — POST /auth/dev and store jwt
   // loginDev start
   Future<void> loginDev({required String email}) async {
-    final url = Uri.parse(_u('auth/dev'));
+    final url = Uri.parse('${baseUrl}/auth/dev');
     final res = await http.post(
       url,
-      headers: {'Content-Type': 'application/json', 'Accept': 'application/json'},
+      headers: _headers(extra: {'Content-Type': 'application/json'}),
       body: jsonEncode({'email': email}),
     );
     if (res.statusCode != 200) {
       throw Exception('Dev auth failed ${res.statusCode}: ${res.body}');
     }
-    final map = (jsonDecode(res.body) as Map<String, dynamic>);
-    final jwt = map['token'] as String;
-    await setAuthToken(jwt); // ✅ now every request will send Authorization: Bearer <jwt>
+    final body = jsonDecode(res.body) as Map<String, dynamic>;
+    final jwt = (body['jwt'] ?? body['token']) as String?;
+    if (jwt == null || jwt.isEmpty) {
+      throw Exception('Auth response missing jwt/token');
+    }
+    await setAuthToken(jwt);
   }
   // loginDev end
 

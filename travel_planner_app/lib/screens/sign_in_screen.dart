@@ -64,6 +64,31 @@ class _SignInScreenState extends State<SignInScreen> {
               icon: const Icon(Icons.apple),
               label: const Text('Continue with Apple'),
             ),
+            const SizedBox(height: 12),
+            // 👇 NEW: Dev Sign-in button (issues jwt via /auth/dev, then calls /auth/me)
+            // dev sign-in button start
+            ElevatedButton(
+              onPressed: _busy
+                  ? null
+                  : () async {
+                      try {
+                        await widget.api.loginDev(email: 'rahul@example.com');
+                        final me = await widget.api.getMe();
+                        final email = me['email'] ?? '(no email)';
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Signed in as $email')),
+                        );
+                      } catch (e) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Dev sign-in failed: $e')),
+                        );
+                      }
+                    },
+              child: const Text('Dev Sign-in'),
+            ),
+            // dev sign-in button end
             const SizedBox(height: 20),
             if (_busy) const CircularProgressIndicator(),
           ],
