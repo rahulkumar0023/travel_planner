@@ -8,7 +8,6 @@ import 'services/trip_storage_service.dart';
 import 'services/hive_migrations.dart';
 import 'services/monthly_store.dart';
 
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
@@ -25,13 +24,7 @@ Future<void> main() async {
   // Trip storage init
   await TripStorageService.init();
 
-  // Read API base from --dart-define (with safe default)
-  const base = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'https://travel-planner-api-latest.onrender.com',
-  );
-
-  final api = ApiService(baseUrl: base);
+  final api = ApiService();
 
   runApp(TravelPlannerApp(api: api));
 }
