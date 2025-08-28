@@ -7,7 +7,8 @@ class MonthlyTotals {
   final double planned;
   final double spent;
   final String currency;
-  MonthlyTotals({required this.planned, required this.spent, required this.currency});
+  MonthlyTotals(
+      {required this.planned, required this.spent, required this.currency});
   double get remaining => (planned - spent);
   double get pct => planned <= 0 ? 0 : (spent / planned).clamp(0, 1);
 }
@@ -26,8 +27,8 @@ Future<MonthlyTotals> computeTotals({
   final end = DateTime(month.year, month.month + 1, 1);
 
   // Planned = sum of all sub planned in monthlyCurrency
-  final planned = envelopes.fold<double>(0, (p, c) =>
-      p + c.subs.fold<double>(0, (pp, s) => pp + s.planned));
+  final planned = envelopes.fold<double>(
+      0, (p, c) => p + c.subs.fold<double>(0, (pp, s) => pp + s.planned));
 
   // Spent = sum of expenses in the month, mapped to envelopes by name
   double spent = 0;
@@ -51,9 +52,9 @@ Future<MonthlyTotals> computeTotals({
     }
     cat ??= envelopes.firstWhere(
       (c) => c.name.trim().toLowerCase() == lower,
-      orElse: () => envelopes.isEmpty ? null as MonthlyCategory : envelopes.first,
+      orElse: () =>
+          envelopes.isEmpty ? null as MonthlyCategory : envelopes.first,
     );
-    if (cat == null) continue;
 
     // currency conversion (TODO: use api.convert if different)
     final from = e.currency.toUpperCase();
@@ -70,5 +71,6 @@ Future<MonthlyTotals> computeTotals({
     }
   }
 
-  return MonthlyTotals(planned: planned, spent: spent, currency: monthlyCurrency);
+  return MonthlyTotals(
+      planned: planned, spent: spent, currency: monthlyCurrency);
 }

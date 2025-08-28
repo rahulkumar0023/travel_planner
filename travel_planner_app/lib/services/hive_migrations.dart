@@ -10,7 +10,8 @@ class HiveMigrations {
     // Optional: have a map of tripId -> currency if you cache trips
     final Map<String, String> tripCurrency = <String, String>{};
     try {
-      final trips = await TripStorageService.loadAll(); // or LocalTripStore.load()
+      final trips =
+          await TripStorageService.loadAll(); // or LocalTripStore.load()
       for (final t in trips) {
         tripCurrency[t.id] = t.currency;
       }
@@ -19,7 +20,7 @@ class HiveMigrations {
     for (final key in box.keys) {
       final e = box.get(key) as Expense?;
       if (e == null) continue;
-      if (e.currency == '' || e.currency == 'null' || e.currency == null) {
+      if (e.currency == '' || e.currency == 'null') {
         final ccy = tripCurrency[e.tripId] ?? 'EUR';
         e.currency = ccy;
         await e.save();

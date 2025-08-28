@@ -10,6 +10,7 @@ import '../services/monthly_store.dart';
 import 'monthly/category_editor_sheet.dart';
 import 'monthly/txn_editor_sheet.dart';
 import 'category_manager_screen.dart';
+import 'sign_in_screen.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
   final ApiService api;
@@ -195,9 +196,26 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
       );
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not create: $e')),
-      );
+      final msg = e.toString();
+      // If unauthorized, route user to Sign In and retry is manual.
+      if (msg.contains('Unauthorized') || msg.contains('401') || msg.contains('missing api_jwt')) {
+        final ok = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+        );
+        if (ok == true) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Signed in. Please try again.')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Sign in required to create.')),
+          );
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not create: $e')),
+        );
+      }
     }
   }
 

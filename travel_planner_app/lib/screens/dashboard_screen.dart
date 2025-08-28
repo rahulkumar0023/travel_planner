@@ -22,6 +22,7 @@ import '../services/outbox_service.dart';
 import 'expense_form_screen.dart';
 import 'group_balance_screen.dart';
 import 'participants_screen.dart';
+import 'sign_in_screen.dart';
 import 'settings_screen.dart';
 import 'budgets_screen.dart';
 import 'trip_selection_screen.dart';
@@ -31,6 +32,7 @@ import '../services/budgets_sync.dart';
 // 👇 NEW: read budgets cache to keep Home in sync with Budgets tab
 import '../services/local_budget_store.dart';
 // 👇 NEW import end
+import 'package:shared_preferences/shared_preferences.dart';
 // imports patch end
 
 
@@ -98,7 +100,28 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
   // 👇 NEW: boot sequence start
   Future<void> _boot() async {
+    // Wait briefly for an auth token. If still missing, prompt sign-in.
     await widget.api.waitForToken();
+    final p = await SharedPreferences.getInstance();
+    final t = p.getString('api_jwt') ?? '';
+    if (t.isEmpty) {
+      if (!mounted) return;
+      final ok = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+      );
+      if (ok != true) return; // user backed out
+    }
+    // If we do have a token, validate it once. If invalid, prompt sign-in.
+    if (await widget.api.hasToken()) {
+      final ok = await widget.api.validateToken();
+      if (!ok) {
+        if (!mounted) return;
+        final res = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+        );
+        if (res != true) return;
+      }
+    }
     await _ensureActiveTrip();
     await _loadLocal();            // will recalc + then update home (see patch below)
     await _loadTripBudgetOverride();
@@ -700,11 +723,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   Widget build(BuildContext context) {
     final t = _activeTrip;
 
-    // 👇 NEW: cheap check from cache & optional server refresh after frame
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _maybeSyncTripBudgetOverrideFromCache();
-      _maybeRefreshOverrideFromServer();
-    });
+    // Avoid scheduling post-frame work on every build to prevent repeated network calls.
 
     if (t == null) {
       return Scaffold(
@@ -1123,4 +1142,3 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     );
   } 
 }
-

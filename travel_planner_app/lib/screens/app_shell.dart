@@ -10,6 +10,8 @@ import 'dashboard_screen.dart';
 import 'expenses_screen.dart';
 import 'trip_selection_screen.dart';
 import 'monthly_budget_screen.dart'; // 👈 NEW
+import 'sign_in_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 // app_shell imports patch end
 
 
@@ -36,6 +38,17 @@ class _AppShellState extends State<AppShell> {
 
     // If no trip is selected yet, open the picker after first frame.
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Ensure signed in first
+      final p = await SharedPreferences.getInstance();
+      final t = p.getString('api_jwt') ?? '';
+      if (t.isEmpty && mounted) {
+        final ok = await Navigator.of(context).push<bool>(
+          MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+        );
+        if (!mounted) return;
+        if (ok != true) return; // user cancelled sign-in
+      }
+
       if (_activeTrip == null && mounted) {
         final picked = await Navigator.of(context).push<Trip>(
           MaterialPageRoute(builder: (_) => TripSelectionScreen(api: widget.api)),

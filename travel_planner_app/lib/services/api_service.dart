@@ -1,7 +1,7 @@
 // api_service imports start
 import 'dart:convert';
 import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode, debugPrint;
 import 'package:http/http.dart' as http;
 // api_service imports end
 
@@ -99,6 +99,7 @@ class ApiService {
     }
     return {
       'Content-Type': 'application/json',
+      'Accept': 'application/json',
       'Authorization': 'Bearer $t',
     };
   }
@@ -106,13 +107,14 @@ class ApiService {
 
   // 👇 NEW: await token before screens fire requests
   Future<void> waitForToken({Duration timeout = const Duration(seconds: 8)}) async {
+    // Wait up to [timeout] for a token to appear in SharedPreferences.
+    // Do not throw on timeout; callers can check presence separately.
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
       final p = await SharedPreferences.getInstance();
       if ((p.getString('api_jwt') ?? '').isNotEmpty) return;
       await Future.delayed(const Duration(milliseconds: 150));
     }
-    throw Exception('Token not available in time');
   }
 
   // public helper for outbox
@@ -125,7 +127,7 @@ class ApiService {
   // getMe start
   Future<Map<String, dynamic>> getMe() async {
     final url = Uri.parse('${baseUrl}/auth/me');
-    final res = await http.get(url, headers: _headers());
+    final res = await http.get(url, headers: await _authHeadersRequired());
     if (res.statusCode != 200) {
       throw Exception('GET /auth/me failed ${res.statusCode}: ${res.body}');
     }
@@ -160,6 +162,25 @@ class ApiService {
     }
   }
   // loginWithIdToken end
+
+  // Check for presence of a JWT in SharedPreferences.
+  Future<bool> hasToken() async {
+    final p = await SharedPreferences.getInstance();
+    return (p.getString('api_jwt') ?? '').isNotEmpty;
+  }
+
+  // Validate current token by calling /auth/me. Clears token if invalid.
+  Future<bool> validateToken() async {
+    try {
+      final url = Uri.parse(_u('auth/me'));
+      final res = await http.get(url, headers: await _authHeadersRequired());
+      if (res.statusCode == 200) return true;
+    } catch (_) {
+      // fall through to clear
+    }
+    await setAuthToken(null);
+    return false;
+  }
 
   // 👇 NEW: dev login — POST /auth/dev and store jwt
   // loginDev start
@@ -545,7 +566,12 @@ class ApiService {
           return created;
         }
 
-
+        // On 401/403: clear token and stop trying other endpoints
+        if (res.statusCode == 401 || res.statusCode == 403) {
+          await setAuthToken(null);
+          lastError = Exception('Unauthorized (${res.statusCode}). Please sign in again.');
+          break;
+        }
 
         // If 404, try the next candidate; otherwise capture error and continue
         if (res.statusCode != 404) {

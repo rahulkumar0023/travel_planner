@@ -76,8 +76,20 @@ extension _Uint8ListX on Uint8List {
   String toBase64Url() => base64Url.encode(this);
 }
 
+// Provide a consistent string form of Apple's identityToken across SDK changes.
 extension _IdTokenX on AuthorizationCredentialAppleID {
-  String? get identityTokenString => identityToken?.toBase64Url();
+  String? get identityTokenString {
+    final Object? t = identityToken; // may be String? or bytes depending on plugin version
+    if (t == null) return null;
+    if (t is String) return t;
+    if (t is List<int>) return base64Url.encode(t);
+    try {
+      // Fallback best-effort
+      return t.toString();
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 extension _SafeB64 on List<int>? {
@@ -135,15 +147,15 @@ extension _AppleAuth on SignInWithApple {
       ]);
 }
 
-extension _AppleFlow on OAuthService {
+extension AppleFlow on OAuthService {
   Future<String> getAppleIdentityToken() async {
     final cred = await SignInWithApple.getAppleIDCredential(scopes: [
       AppleIDAuthorizationScopes.email,
       AppleIDAuthorizationScopes.fullName,
     ]);
-    final idToken = cred.identityToken?.toBase64Url();
+    final idToken = cred.identityTokenString;
     if (idToken == null || idToken.isEmpty) {
-      throw Exception('Apple returned empty identityToken — on iOS real device only, and ensure Sign In With Apple is configured.');
+      throw Exception('Apple returned empty identityToken — test on a real iOS device and ensure the capability is configured.');
     }
     // sanity check it's a JWT (header.payload.signature)
     if (idToken.split('.').length != 3) {
@@ -153,4 +165,3 @@ extension _AppleFlow on OAuthService {
   }
 }
 // getAppleIdentityToken end
-

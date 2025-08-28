@@ -76,9 +76,8 @@ class _SignInScreenState extends State<SignInScreen> {
                         final me = await widget.api.getMe();
                         final email = me['email'] ?? '(no email)';
                         if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Signed in as $email')),
-                        );
+                        // Navigate back to the previous screen (e.g., Home)
+                        Navigator.pop(context, true);
                       } catch (e) {
                         if (!context.mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(

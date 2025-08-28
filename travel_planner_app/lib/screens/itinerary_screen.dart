@@ -6,7 +6,8 @@ import '../services/api_service.dart';
 class ItineraryScreen extends StatefulWidget {
   final Trip? Function() getActiveTrip;
   final ApiService api;
-  const ItineraryScreen({super.key, required this.getActiveTrip, required this.api});
+  const ItineraryScreen(
+      {super.key, required this.getActiveTrip, required this.api});
 
   @override
   State<ItineraryScreen> createState() => _ItineraryScreenState();
@@ -66,7 +67,8 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
               child: DropdownButtonFormField<int>(
                 value: _days,
                 items: [1, 2, 3, 4, 5, 6, 7]
-                    .map((d) => DropdownMenuItem(value: d, child: Text('$d days')))
+                    .map((d) =>
+                        DropdownMenuItem(value: d, child: Text('$d days')))
                     .toList(),
                 onChanged: (v) => setState(() => _days = v ?? 3),
                 decoration: const InputDecoration(labelText: 'Length'),
@@ -145,7 +147,7 @@ class _ItineraryScreenState extends State<ItineraryScreen> {
 class _InterestChips extends StatefulWidget {
   final List<String> initial;
   final void Function(Set<String>) onChange;
-  const _InterestChips({required this.initial, required this.onChange, super.key});
+  const _InterestChips({required this.initial, required this.onChange});
 
   @override
   State<_InterestChips> createState() => _InterestChipsState();
@@ -184,4 +186,3 @@ class _InterestChipsState extends State<_InterestChips> {
     );
   }
 }
-

@@ -14,6 +14,8 @@ import '../services/local_budget_store.dart';
 // 👇 NEW import end
 import '../services/archived_trips_store.dart';
 // imports patch end
+import 'sign_in_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class TripSelectionScreen extends StatefulWidget {
   final ApiService api;
@@ -33,7 +35,23 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
     super.initState();
     () async {
       try {
+        // Wait a bit for token; if missing, prompt sign-in.
         await widget.api.waitForToken();
+        final prefs = await SharedPreferences.getInstance();
+        final token = prefs.getString('api_jwt') ?? '';
+        if (token.isEmpty) {
+          if (!mounted) return;
+          final ok = await Navigator.of(context).push<bool>(
+            MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+          );
+          if (ok != true) {
+            // Stay on screen but keep future empty to avoid immediate errors
+            if (mounted) setState(() => _future = Future.value(<Trip>[]));
+            return;
+          }
+        }
+        // Optional: validate once to clear stale/invalid token.
+        await widget.api.validateToken();
         final fut = widget.api.fetchTripsOrCache();
         if (mounted) {
           setState(() {
@@ -113,6 +131,14 @@ Future<void> _ensureTripBudgetForTrip({
 // _ensureTripBudgetForTrip method end
 
   Future<void> _createTripDialog() async {
+    // Ensure signed-in before attempting to create on the server.
+    if (!await widget.api.hasToken() || !await widget.api.validateToken()) {
+      if (!mounted) return;
+      final ok = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+      );
+      if (ok != true) return; // user cancelled
+    }
     final nameCtrl = TextEditingController();
     final extraCcyCtrl = TextEditingController(text: 'TRY,INR'); // example default
     final budgetCtrl = TextEditingController(text: '1000');
