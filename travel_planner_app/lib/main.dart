@@ -3,10 +3,12 @@ import 'package:hive_flutter/hive_flutter.dart';
 import 'package:travel_planner_app/services/hive_migrations.dart';
 import 'models/expense.dart';
 import 'screens/app_shell.dart';
+import 'screens/sign_in_screen.dart';
 import 'services/api_service.dart';
 import 'services/trip_storage_service.dart';
 import 'services/hive_migrations.dart';
 import 'services/monthly_store.dart';
+import 'app_nav.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,20 +27,27 @@ Future<void> main() async {
   await TripStorageService.init();
 
   final api = ApiService();
+  // Decide initial route based on restored session
+  final restored = await api.restoreSession();
+  final startRoute = restored ? '/home' : '/sign-in';
 
-  runApp(TravelPlannerApp(api: api));
+  runApp(TravelPlannerApp(api: api, initialRoute: startRoute));
 }
 
 class TravelPlannerApp extends StatelessWidget {
   final ApiService api;
-  const TravelPlannerApp({super.key, required this.api});
+  final String initialRoute;
+  const TravelPlannerApp({super.key, required this.api, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {
     final seed = const Color(0xFF0EA5A5);
+    // 👇 NEW: routes for sign-in and home
+    // app routes start
     return MaterialApp(
       title: 'Travel Planner',
       debugShowCheckedModeBanner: false,
+      navigatorKey: navigatorKey,
       themeMode: ThemeMode.system,
       theme: ThemeData(
         useMaterial3: true,
@@ -56,7 +65,12 @@ class TravelPlannerApp extends StatelessWidget {
             ColorScheme.fromSeed(seedColor: seed, brightness: Brightness.dark),
         cardTheme: const CardThemeData(elevation: 0),
       ),
-      home: AppShell(api: api), // ⬅ make sure AppShell takes ApiService
+      routes: {
+        '/sign-in': (ctx) => SignInScreen(api: api),
+        '/home': (ctx) => AppShell(api: api),
+      },
+      initialRoute: initialRoute,
     );
+    // app routes end
   }
 }

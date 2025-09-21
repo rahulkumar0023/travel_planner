@@ -6,6 +6,11 @@ import 'package:http/http.dart' as http;
 // api_service imports end
 
 import 'package:shared_preferences/shared_preferences.dart';
+// 👇 NEW: secure storage import
+// api_service storage import start
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+// api_service storage import end
+import '../app_nav.dart';
 
 import '../models/balance_row.dart';
 import '../models/budget.dart';
@@ -21,34 +26,103 @@ import 'fx_service.dart';
 import '../models/monthly_txn.dart';
 import './monthly_store.dart';
 
+// 👇 NEW: storage instance + keys (place near top of file, after imports)
+// api_service storage fields start
+const _kJwtKey = 'auth_jwt';
+const _kEmailKey = 'auth_email';
+const _kUserIdKey = 'auth_userId';
+final FlutterSecureStorage _secure = const FlutterSecureStorage(
+  aOptions: AndroidOptions(encryptedSharedPreferences: true),
+);
+// api_service storage fields end
+
+// --- Auth expiry tracking ---
+Timer? _expiryTimer;
+DateTime? _sessionExpiry;
+
+Map<String, dynamic> _decodeJwtPayload(String jwt) {
+  try {
+    final parts = jwt.split('.');
+    if (parts.length != 3) return {};
+    String normalized(String s) => s.padRight(s.length + (4 - s.length % 4) % 4, '=');
+    final payload = utf8.decode(base64Url.decode(normalized(parts[1])));
+    final map = (jsonDecode(payload) as Map).cast<String, dynamic>();
+    return map;
+  } catch (_) {
+    return {};
+  }
+}
+
+Duration? sessionRemaining() {
+  if (_sessionExpiry == null) return null;
+  final d = _sessionExpiry!.difference(DateTime.now());
+  return d.isNegative ? Duration.zero : d;
+}
+
 // 👇 NEW: baseUrl that works on iOS/Android emulators & web
 // baseUrl start
 String get baseUrl {
-  if (kIsWeb) return 'http://localhost:8080';
+  if (kIsWeb) return 'http://192.168.0.39:8080';
   if (Platform.isAndroid) return 'http://10.0.2.2:8080'; // Android emulator → host Mac
-  return 'http://localhost:8080'; // iOS simulator / macOS
+  return 'http://192.168.0.39:8080'; // iOS simulator / macOS
 }
 // baseUrl end
 
-// 👇 NEW: hold JWT in memory (temp) + setter
-// jwt holder start
+// 👇 UPDATE: store/clear JWT in secure storage whenever token changes
+// setAuthToken start
 String? _jwt;
+void setAuthToken(String? token, {String? email, String? userId}) async {
+  // cancel any previous timer
+  _expiryTimer?.cancel();
+  _sessionExpiry = null;
 
-Future<void> setAuthToken(String? token) async {
   _jwt = token;
-  if (_jwt != null) {
+  if (_jwt != null && _jwt!.isNotEmpty) {
     debugPrint('[Api] setAuthToken -> ${_jwt!.substring(0, 16)}...');
+
+    // persist
+    try {
+      await _secure.write(key: _kJwtKey, value: _jwt);
+      if (email != null) await _secure.write(key: _kEmailKey, value: email);
+      if (userId != null) await _secure.write(key: _kUserIdKey, value: userId);
+    } catch (_) {}
+
+    // backward-compatible: also mirror to SharedPreferences for existing callers
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString('api_jwt', _jwt!);
+      if (email != null) await p.setString('user_email', email);
+    } catch (_) {}
+
+    // decode exp and schedule auto-logout
+    final payload = _decodeJwtPayload(_jwt!);
+    final exp = payload['exp'];
+    if (exp is int) {
+      _sessionExpiry = DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true).toLocal();
+      final delay = _sessionExpiry!.difference(DateTime.now());
+      if (!delay.isNegative) {
+        _expiryTimer = Timer(delay + const Duration(seconds: 1), () {
+          debugPrint('[Auth] JWT expired — auto sign-out');
+          _onAuthFailed();
+        });
+      }
+    }
   } else {
     debugPrint('[Api] cleared auth token');
-  }
-  final p = await SharedPreferences.getInstance();
-  if (token != null) {
-    await p.setString('api_jwt', token);
-  } else {
-    await p.remove('api_jwt');
+    try {
+      await _secure.delete(key: _kJwtKey);
+      await _secure.delete(key: _kEmailKey);
+      await _secure.delete(key: _kUserIdKey);
+    } catch (_) {}
+    // mirror clear in SharedPreferences
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove('api_jwt');
+      await p.remove('user_email');
+    } catch (_) {}
   }
 }
-// jwt holder end
+// setAuthToken end
 
 // 👇 NEW: shared headers ensuring Authorization: Bearer <jwt>
 // _headers start
@@ -69,6 +143,37 @@ class _FxCache {
 
   final double rate;
   final DateTime ts;
+}
+
+// --- Auth failure handler + HTTP guard ---
+void _onAuthFailed() {
+  _expiryTimer?.cancel();
+  _sessionExpiry = null;
+  _jwt = null;
+  () async {
+    try {
+      await _secure.delete(key: _kJwtKey);
+      await _secure.delete(key: _kEmailKey);
+      await _secure.delete(key: _kUserIdKey);
+      final p = await SharedPreferences.getInstance();
+      await p.remove('api_jwt');
+      await p.remove('user_email');
+    } catch (_) {}
+    navToSignIn();
+  }();
+}
+
+void _guardAuthResponse(int statusCode) {
+  if (statusCode == 401 || statusCode == 403) {
+    debugPrint('[Auth] $statusCode received — forcing sign-out');
+    _onAuthFailed();
+  }
+}
+
+Future<http.Response> _sendWithGuard(Future<http.Response> future) async {
+  final res = await future;
+  _guardAuthResponse(res.statusCode);
+  return res;
 }
 
 class ApiService {
@@ -92,15 +197,17 @@ class ApiService {
   // 👇 NEW: hard gate — throws if token missing
   // _authHeadersRequired start
   Future<Map<String, String>> _authHeadersRequired() async {
-    final p = await SharedPreferences.getInstance();
-    final t = p.getString('api_jwt') ?? '';
-    if (t.isEmpty) {
-      throw Exception('Not authenticated: missing api_jwt');
+    // Prefer in-memory token; if missing, attempt secure restore
+    var token = _jwt;
+    token ??= await _secure.read(key: _kJwtKey);
+    if (token == null || token.isEmpty) {
+      throw Exception('Not authenticated: missing auth token');
     }
+    _jwt = token; // keep memory in sync
     return {
       'Content-Type': 'application/json',
       'Accept': 'application/json',
-      'Authorization': 'Bearer $t',
+      'Authorization': 'Bearer $token',
     };
   }
   // _authHeadersRequired end
@@ -111,8 +218,19 @@ class ApiService {
     // Do not throw on timeout; callers can check presence separately.
     final deadline = DateTime.now().add(timeout);
     while (DateTime.now().isBefore(deadline)) {
-      final p = await SharedPreferences.getInstance();
-      if ((p.getString('api_jwt') ?? '').isNotEmpty) return;
+      // in-memory fast path
+      if (_jwt != null && _jwt!.isNotEmpty) return;
+      // secure storage fallback
+      final saved = await _secure.read(key: _kJwtKey);
+      if (saved != null && saved.isNotEmpty) {
+        _jwt = saved;
+        return;
+      }
+      // legacy mirror (in case some code still writes to SharedPreferences)
+      try {
+        final p = await SharedPreferences.getInstance();
+        if ((p.getString('api_jwt') ?? '').isNotEmpty) return;
+      } catch (_) {}
       await Future.delayed(const Duration(milliseconds: 150));
     }
   }
@@ -127,7 +245,7 @@ class ApiService {
   // getMe start
   Future<Map<String, dynamic>> getMe() async {
     final url = Uri.parse('${baseUrl}/auth/me');
-    final res = await http.get(url, headers: await _authHeadersRequired());
+    final res = await _sendWithGuard(http.get(url, headers: await _authHeadersRequired()));
     if (res.statusCode != 200) {
       throw Exception('GET /auth/me failed ${res.statusCode}: ${res.body}');
     }
@@ -142,11 +260,11 @@ class ApiService {
     required String provider,
   }) async {
     final url = Uri.parse(_u('auth/$provider'));
-    final res = await http.post(
+    final res = await _sendWithGuard(http.post(
       url,
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode({'idToken': idToken}),
-    );
+    ));
     if (res.statusCode != 200) {
       throw Exception('Auth failed: ${res.statusCode} ${res.body}');
     }
@@ -154,31 +272,37 @@ class ApiService {
     final jwt = data['jwt'] as String?;
     final email = data['email'] as String?;
     if (jwt != null) {
-      await setAuthToken(jwt);
-    }
-    if (email != null) {
-      final p = await SharedPreferences.getInstance();
-      await p.setString('user_email', email);
+      setAuthToken(jwt, email: email);
     }
   }
   // loginWithIdToken end
 
   // Check for presence of a JWT in SharedPreferences.
   Future<bool> hasToken() async {
-    final p = await SharedPreferences.getInstance();
-    return (p.getString('api_jwt') ?? '').isNotEmpty;
+    if (_jwt != null && _jwt!.isNotEmpty) return true;
+    final saved = await _secure.read(key: _kJwtKey);
+    if (saved != null && saved.isNotEmpty) {
+      _jwt = saved;
+      return true;
+    }
+    try {
+      final p = await SharedPreferences.getInstance();
+      return (p.getString('api_jwt') ?? '').isNotEmpty;
+    } catch (_) {
+      return false;
+    }
   }
 
   // Validate current token by calling /auth/me. Clears token if invalid.
   Future<bool> validateToken() async {
     try {
       final url = Uri.parse(_u('auth/me'));
-      final res = await http.get(url, headers: await _authHeadersRequired());
+      final res = await _sendWithGuard(http.get(url, headers: await _authHeadersRequired()));
       if (res.statusCode == 200) return true;
     } catch (_) {
       // fall through to clear
     }
-    await setAuthToken(null);
+    setAuthToken(null);
     return false;
   }
 
@@ -186,11 +310,11 @@ class ApiService {
   // loginDev start
   Future<void> loginDev({required String email}) async {
     final url = Uri.parse('${baseUrl}/auth/dev');
-    final res = await http.post(
+    final res = await _sendWithGuard(http.post(
       url,
       headers: _headers(extra: {'Content-Type': 'application/json'}),
       body: jsonEncode({'email': email}),
-    );
+    ));
     if (res.statusCode != 200) {
       throw Exception('Dev auth failed ${res.statusCode}: ${res.body}');
     }
@@ -199,15 +323,68 @@ class ApiService {
     if (jwt == null || jwt.isEmpty) {
       throw Exception('Auth response missing jwt/token');
     }
-    await setAuthToken(jwt);
+    setAuthToken(jwt);
   }
   // loginDev end
+
+  // 👇 NEW: restore session on app launch
+  // restoreSession start
+  Future<bool> restoreSession() async {
+    final saved = await _secure.read(key: _kJwtKey);
+    if (saved != null && saved.isNotEmpty) {
+      _jwt = saved;
+      debugPrint('[Api] restored token -> ${_jwt!.substring(0, 16)}...');
+      // schedule expiry after restore as well
+      setAuthToken(_jwt);
+      return true;
+    }
+    return false;
+  }
+  // restoreSession end
+
+  // 👇 NEW: convenience getter
+  // isSignedIn start
+  bool get isSignedIn => _jwt != null && _jwt!.isNotEmpty;
+  // isSignedIn end
+
+  // 👇 NEW: signOut — clears token + optional provider sign-outs
+  // signOut start
+  Future<void> signOut() async {
+    try {
+      // Optional: revoke Google session if you use google_sign_in
+      // import 'package:google_sign_in/google_sign_in.dart'; at top if you enable this
+      // await GoogleSignIn().signOut();
+    } catch (_) {}
+    // Apple Sign-In has no client-side persistent session to revoke.
+
+    await _secure.delete(key: _kJwtKey);
+    await _secure.delete(key: _kEmailKey);
+    await _secure.delete(key: _kUserIdKey);
+    // also clear SharedPreferences mirror
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.remove('api_jwt');
+      await p.remove('user_email');
+    } catch (_) {}
+    _jwt = null;
+    debugPrint('[Api] signed out');
+  }
+  // signOut end
+
+  // 👇 OPTIONAL: helper to login (dev) then fetch profile and persist userId/email
+  // signInDevAndFetch start
+  Future<void> signInDevAndFetch(String email) async {
+    await loginDev(email: email);                 // uses your /auth/dev
+    final me = await getMe();                     // calls /auth/me using the new jwt
+    setAuthToken(_jwt, email: me['email'] as String?, userId: me['userId'] as String?);
+  }
+  // signInDevAndFetch end
 
   // -----------------------------
   // Trips
   // -----------------------------
   Future<List<Trip>> fetchTrips() async {
-    final res = await http.get(Uri.parse(_u('trips')), headers: await _authHeadersRequired());
+    final res = await _sendWithGuard(http.get(Uri.parse(_u('trips')), headers: await _authHeadersRequired()));
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
       return data.map((e) => Trip.fromJson(e)).toList();
@@ -229,11 +406,11 @@ class ApiService {
   }
 
   Future<Trip> createTrip(Trip t) async {
-    final res = await http.post(
+    final res = await _sendWithGuard(http.post(
       Uri.parse(_u('trips')),
       headers: await _authHeadersRequired(),
       body: jsonEncode(t.toJson()),
-    );
+    ));
     if (res.statusCode == 200 || res.statusCode == 201) {
       return Trip.fromJson(jsonDecode(res.body));
     }
@@ -241,12 +418,126 @@ class ApiService {
     throw Exception('Failed to create trip (${res.statusCode}) ${res.body}');
   }
 
+  /// Create a lightweight group trip with just a name + base currency.
+  /// Tries common REST variants and returns a Trip, synthesizing reasonable
+  /// defaults if the backend returns a minimal payload.
+  Future<Trip> createTripWithGroup({
+    required String name,
+    required String currency,
+  }) async {
+    final payload = {
+      'name': name,
+      'currency': currency.toUpperCase(),
+    };
+
+    final urls = <String>[
+      _u('trips'),
+      _u('api/trips'),
+      _u('trip'),
+    ];
+
+    Exception? lastErr;
+    http.Response? lastRes;
+    for (final u in urls) {
+      try {
+        final res = await _sendWithGuard(http.post(
+          Uri.parse(u),
+          headers: await _authHeadersRequired(),
+          body: jsonEncode(payload),
+        ));
+        lastRes = res;
+        if (res.statusCode == 200 || res.statusCode == 201) {
+          if (res.body.isNotEmpty) {
+            try {
+              final map = (jsonDecode(res.body) as Map).cast<String, dynamic>();
+              // If backend returns a full Trip, use it; otherwise synthesize.
+              if (map.containsKey('startDate') && map.containsKey('endDate') && map.containsKey('initialBudget')) {
+                return Trip.fromJson(map);
+              }
+              final id = (map['id'] ?? map['tripId'] ?? map['uuid'] ?? '').toString();
+              final participants = (map['participants'] as List?)?.cast<String>() ?? const <String>[];
+              return Trip(
+                id: id.isNotEmpty ? id : DateTime.now().millisecondsSinceEpoch.toString(),
+                name: map['name']?.toString() ?? name,
+                startDate: DateTime.now(),
+                endDate: DateTime.now().add(const Duration(days: 3)),
+                currency: (map['currency']?.toString() ?? currency).toUpperCase(),
+                initialBudget: (map['initialBudget'] as num?)?.toDouble() ?? 0.0,
+                participants: participants,
+                spendCurrencies: const [],
+              );
+            } catch (_) {
+              // fall through to synthesis below
+            }
+          }
+          // Success without body — synthesize with Location header if present
+          final loc = res.headers['location'];
+          final id = (loc != null && loc.trim().isNotEmpty)
+              ? loc.split('/').last
+              : DateTime.now().millisecondsSinceEpoch.toString();
+          return Trip(
+            id: id,
+            name: name,
+            startDate: DateTime.now(),
+            endDate: DateTime.now().add(const Duration(days: 3)),
+            currency: currency.toUpperCase(),
+            initialBudget: 0,
+            participants: const [],
+            spendCurrencies: const [],
+          );
+        }
+        // keep trying alternate endpoints on 404
+        if (res.statusCode != 404) {
+          lastErr = Exception('Create group trip failed @ $u: ${res.statusCode} ${res.body}');
+        }
+      } catch (e) {
+        lastErr = Exception('Create group trip error @ $u: $e');
+      }
+    }
+    if (lastRes != null) {
+      throw Exception('Create group trip failed: ${lastRes.statusCode} ${lastRes.body}');
+    }
+    throw lastErr ?? Exception('Create group trip failed: no endpoint available');
+  }
+
+  /// Join an existing trip using an invite token.
+  Future<void> joinTrip(String tripId, String token) async {
+    final attempts = <({String method, String url, bool useQuery})>[
+      (method: 'POST', url: _u('trips/$tripId/join'), useQuery: false),
+      (method: 'POST', url: _u('api/trips/$tripId/join'), useQuery: false),
+      (method: 'GET',  url: _u('trips/$tripId/join'), useQuery: true),
+    ];
+
+    Exception? lastErr;
+    for (final a in attempts) {
+      try {
+        final uri = a.useQuery
+            ? Uri.parse(a.url).replace(queryParameters: {'token': token})
+            : Uri.parse(a.url);
+        final res = await _sendWithGuard(
+          a.method == 'GET'
+              ? http.get(uri, headers: await _authHeadersRequired())
+              : http.post(uri, headers: await _authHeadersRequired(), body: jsonEncode({'token': token})),
+        );
+        if (res.statusCode == 200 || res.statusCode == 201 || res.statusCode == 204) {
+          return;
+        }
+        if (res.statusCode != 404) {
+          lastErr = Exception('Join trip failed @ ${a.method} ${a.url}: ${res.statusCode} ${res.body}');
+        }
+      } catch (e) {
+        lastErr = Exception('Join trip error @ ${a.method} ${a.url}: $e');
+      }
+    }
+    throw lastErr ?? Exception('Join trip failed: endpoint not found');
+  }
+
   Future<Trip> updateTrip(Trip t) async {
-    final res = await http.put(
+    final res = await _sendWithGuard(http.put(
       Uri.parse(_u('trips/${t.id}')),
       headers: await _authHeadersRequired(),
       body: jsonEncode(t.toJson()),
-    );
+    ));
     if (res.statusCode != 200) {
       throw Exception('Failed to update trip (${res.statusCode}) ${res.body}');
     }
@@ -254,7 +545,7 @@ class ApiService {
   }
 
   Future<void> deleteTrip(String id) async {
-    final res = await http.delete(Uri.parse(_u('trips/$id')), headers: await _authHeadersRequired());
+    final res = await _sendWithGuard(http.delete(Uri.parse(_u('trips/$id')), headers: await _authHeadersRequired()));
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete trip (${res.statusCode}) ${res.body}');
     }
@@ -264,10 +555,10 @@ class ApiService {
   // Expenses
   // -----------------------------
   Future<List<Expense>> fetchExpenses(String tripId) async {
-    final res = await http.get(
+    final res = await _sendWithGuard(http.get(
       Uri.parse(_u('expenses/$tripId')),
       headers: await _authHeadersRequired(),
-    );
+    ));
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
       return data.map((e) => Expense.fromJson(e)).toList();
@@ -276,11 +567,11 @@ class ApiService {
   }
 
   Future<void> addExpense(Expense e) async {
-    final res = await http.post(
+    final res = await _sendWithGuard(http.post(
       Uri.parse(_u('expenses')),
       headers: await _authHeadersRequired(),
       body: jsonEncode(e.toJson()),
-    );
+    ));
     if (res.statusCode != 200 && res.statusCode != 201) {
       throw Exception('Failed to add expense (${res.statusCode})');
     }
@@ -288,7 +579,7 @@ class ApiService {
 
   Future<Expense> updateExpense(Expense e) async {
     final uri = Uri.parse(_u('expenses/${e.id}'));
-    final res = await http.put(uri, headers: await _authHeadersRequired(), body: jsonEncode(e.toJson()));
+    final res = await _sendWithGuard(http.put(uri, headers: await _authHeadersRequired(), body: jsonEncode(e.toJson())));
     if (res.statusCode != 200) {
       throw Exception('Failed to update expense (${res.statusCode}) ${res.body}');
     }
@@ -297,7 +588,7 @@ class ApiService {
 
 
   Future<void> deleteExpense(String id) async {
-    final res = await http.delete(Uri.parse(_u('expenses/$id')), headers: await _authHeadersRequired());
+    final res = await _sendWithGuard(http.delete(Uri.parse(_u('expenses/$id')), headers: await _authHeadersRequired()));
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
     }
@@ -309,15 +600,15 @@ class ApiService {
   // -----------------------------
   Future<List<BalanceRow>> fetchGroupBalances(String tripId) async {
     // Prefer /balances/{tripId}; fallback to legacy /expenses/split/{tripId}
-    var res = await http.get(
+    var res = await _sendWithGuard(http.get(
       Uri.parse(_u('balances/$tripId')),
       headers: await _authHeadersRequired(),
-    );
+    ));
     if (res.statusCode == 404) {
-      res = await http.get(
+      res = await _sendWithGuard(http.get(
         Uri.parse(_u('expenses/split/$tripId')),
         headers: await _authHeadersRequired(),
-      );
+      ));
     }
     if (res.statusCode != 200) {
       throw Exception('Balances fetch failed: ${res.statusCode} ${res.body}');
@@ -345,19 +636,19 @@ class ApiService {
       if (date != null) 'date': date.toIso8601String(),
     };
 
-    var res = await http.post(
+    var res = await _sendWithGuard(http.post(
       Uri.parse(_u('balances/settle')),
       headers: await _authHeadersRequired(),
       body: jsonEncode(payload),
-    );
+    ));
 
     // Fallback: legacy/alternate endpoint
     if (res.statusCode == 404) {
-      res = await http.post(
+      res = await _sendWithGuard(http.post(
         Uri.parse(_u('settlements')),
         headers: await _authHeadersRequired(),
         body: jsonEncode(payload),
-      );
+      ));
     }
 
     if (res.statusCode != 200 && res.statusCode != 201) {
@@ -426,7 +717,7 @@ class ApiService {
         'amount': amount.toString(),
       },
     );
-    final res = await http.get(uri, headers: await _authHeadersRequired());
+    final res = await _sendWithGuard(http.get(uri, headers: await _authHeadersRequired()));
     if (res.statusCode != 200) {
       if (kDebugMode) {
         debugPrint('convert(raw) HTTP ${res.statusCode}: ${res.body}');
@@ -462,10 +753,10 @@ class ApiService {
   // Budgets
   // -----------------------------
   Future<List<Budget>> fetchBudgets() async {
-    final res = await http.get(
+    final res = await _sendWithGuard(http.get(
       Uri.parse(_u('budgets')),
       headers: await _authHeadersRequired(),
-    );
+    ));
     if (res.statusCode == 404) return <Budget>[]; // backend not ready yet
     if (res.statusCode != 200) {
       throw Exception('Fetch budgets failed: ${res.statusCode} ${res.body}');
@@ -526,11 +817,11 @@ class ApiService {
 
     for (final url in endpoints) {
       try {
-        final res = await http.post(
+        final res = await _sendWithGuard(http.post(
           Uri.parse(url),
           headers: await _authHeadersRequired(),
           body: jsonEncode(payload),
-        );
+        ));
 
         // Success with body
         if (res.statusCode == 200 || res.statusCode == 201) {
@@ -568,7 +859,7 @@ class ApiService {
 
         // On 401/403: clear token and stop trying other endpoints
         if (res.statusCode == 401 || res.statusCode == 403) {
-          await setAuthToken(null);
+          setAuthToken(null);
           lastError = Exception('Unauthorized (${res.statusCode}). Please sign in again.');
           break;
         }
@@ -624,7 +915,7 @@ class ApiService {
     for (final e in endpoints) {
       try {
         final uri = Uri.parse(e.url);
-        final res = await (
+        final res = await _sendWithGuard(
             e.method == 'PUT' ? http.put(uri, headers: await _authHeadersRequired(), body: jsonEncode(payload)) :
             e.method == 'PATCH' ? http.patch(uri, headers: await _authHeadersRequired(), body: jsonEncode(payload)) :
             http.post(uri, headers: await _authHeadersRequired(), body: jsonEncode(payload))
@@ -677,7 +968,7 @@ class ApiService {
     for (final a in attempts) {
       try {
         final uri = Uri.parse(a.url);
-        final res = await (
+        final res = await _sendWithGuard(
             a.method == 'DELETE' ? http.delete(uri, headers: await _authHeadersRequired()) :
             http.post(uri, headers: await _authHeadersRequired())
         );
@@ -705,21 +996,21 @@ class ApiService {
     required String tripBudgetId,
     required String monthlyBudgetId,
   }) async {
-    final res = await http.post(
+    final res = await _sendWithGuard(http.post(
       Uri.parse(_u('budgets/$tripBudgetId/link')),
       headers: await _authHeadersRequired(),
       body: jsonEncode({'monthlyBudgetId': monthlyBudgetId}),
-    );
+    ));
     if (res.statusCode == 404) {
       // Alternate legacy endpoint
-      final res2 = await http.post(
+      final res2 = await _sendWithGuard(http.post(
         Uri.parse(_u('budget-links')),
         headers: await _authHeadersRequired(),
         body: jsonEncode({
           'tripBudgetId': tripBudgetId,
           'monthlyBudgetId': monthlyBudgetId,
         }),
-      );
+      ));
       if (res2.statusCode != 200 && res2.statusCode != 201) {
         throw Exception('Linking failed: ${res2.statusCode} ${res2.body}');
       }
@@ -734,16 +1025,16 @@ class ApiService {
   // unlink Trip Budget start
   Future<void> unlinkTripBudget({required String tripBudgetId}) async {
     // Preferred endpoint
-    var res = await http.post(
+    var res = await _sendWithGuard(http.post(
       Uri.parse(_u('budgets/$tripBudgetId/unlink')),
       headers: await _authHeadersRequired(),
-    );
+    ));
     if (res.statusCode == 404) {
       // Legacy fallback: delete the link row by trip id
-      res = await http.delete(
+      res = await _sendWithGuard(http.delete(
         Uri.parse(_u('budget-links/$tripBudgetId')),
         headers: await _authHeadersRequired(),
-      );
+      ));
     }
     if (res.statusCode != 200 && res.statusCode != 204) {
       () async {

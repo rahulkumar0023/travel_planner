@@ -9,13 +9,13 @@ import '../models/currencies.dart'; // wherever kCurrencyCodes is defined
 import '../models/budget.dart'; // for BudgetKind.trip
 // 👇 NEW import start
 import '../services/budgets_sync.dart';
+import 'package:share_plus/share_plus.dart';
 // 👇 NEW: to update budgets cache immediately
 import '../services/local_budget_store.dart';
 // 👇 NEW import end
 import '../services/archived_trips_store.dart';
 // imports patch end
 import 'sign_in_screen.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 class TripSelectionScreen extends StatefulWidget {
   final ApiService api;
@@ -37,9 +37,7 @@ class _TripSelectionScreenState extends State<TripSelectionScreen> {
       try {
         // Wait a bit for token; if missing, prompt sign-in.
         await widget.api.waitForToken();
-        final prefs = await SharedPreferences.getInstance();
-        final token = prefs.getString('api_jwt') ?? '';
-        if (token.isEmpty) {
+        if (!widget.api.isSignedIn) {
           if (!mounted) return;
           final ok = await Navigator.of(context).push<bool>(
             MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
@@ -239,12 +237,103 @@ Future<void> _ensureTripBudgetForTrip({
 
   }
 
+  // Create Group Trip (name + base currency) and share invite link
+  Future<void> _createGroupTripDialog() async {
+    // Ensure signed-in before attempting to create on the server.
+    if (!await widget.api.hasToken() || !await widget.api.validateToken()) {
+      if (!mounted) return;
+      final ok = await Navigator.of(context).push<bool>(
+        MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
+      );
+      if (ok != true) return; // user cancelled
+    }
+
+    final nameCtrl = TextEditingController();
+    String selectedCcy = 'EUR';
+
+    final created = await showDialog<({String name, String currency})>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Create Group Trip'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              decoration: const InputDecoration(labelText: 'Trip name'),
+            ),
+            const SizedBox(height: 8),
+            DropdownButtonFormField<String>(
+              value: selectedCcy,
+              decoration: const InputDecoration(labelText: 'Base currency'),
+              items: kCurrencyCodes
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) => selectedCcy = (v ?? 'EUR'),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () {
+              final n = nameCtrl.text.trim();
+              if (n.isEmpty) return;
+              Navigator.pop(ctx, (name: n, currency: selectedCcy));
+            },
+            child: const Text('Create'),
+          ),
+        ],
+      ),
+    );
+
+    if (created == null) return;
+
+    try {
+      final saved = await widget.api.createTripWithGroup(
+        name: created.name,
+        currency: created.currency,
+      );
+
+      await TripStorageService.save(saved);
+      if (!mounted) return;
+
+      // Show ID, and share an invite link (as a plain String)
+      final link = widget.api
+          .urlFor('trips/${saved.id}/join?token=XYZ')
+          .toString();
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Trip created (ID: ${saved.id})')),
+      );
+
+      await Share.share(
+        '✈️ Join my trip "${saved.name}"\n\nJoin via this link:\n$link',
+        subject: 'Trip Invite: ${saved.name}',
+      );
+
+      await _refresh();
+      if (!mounted) return;
+      Navigator.of(context).pop<Trip>(saved);
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Create group trip failed: $e')),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text('Select Trip'),
         actions: [
+          IconButton(
+            tooltip: 'Create group trip',
+            icon: const Icon(Icons.group_add_outlined),
+            onPressed: _createGroupTripDialog,
+          ),
           IconButton(
             tooltip: _showArchived ? 'Hide archived' : 'Show archived',
             icon: Icon(_showArchived ? Icons.inbox_outlined : Icons.inbox_rounded),

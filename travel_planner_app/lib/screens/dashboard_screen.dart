@@ -9,6 +9,7 @@ import '../models/currencies.dart';
 
 import 'dart:io';
 import 'dart:convert';
+import 'dart:async';
 
 import '../services/api_service.dart';
 import '../services/prefs_service.dart';
@@ -29,10 +30,10 @@ import 'trip_selection_screen.dart';
 import 'receipt_viewer_screen.dart'; // NEW file below
 // 👇 NEW import start
 import '../services/budgets_sync.dart';
+import 'package:share_plus/share_plus.dart';
 // 👇 NEW: read budgets cache to keep Home in sync with Budgets tab
 import '../services/local_budget_store.dart';
 // 👇 NEW import end
-import 'package:shared_preferences/shared_preferences.dart';
 // imports patch end
 
 
@@ -51,6 +52,8 @@ class DashboardScreen extends StatefulWidget {
 }
 
 class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
+  Timer? _t; // session chip timer
+  String _label = '';
   double _spentInTripCcy = 0.0;
 
   Trip? _activeTrip;
@@ -85,6 +88,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     _flushOutbox();
     _box = Hive.box<Expense>('expensesBox');
     _boot(); // 👈 NEW
+    // Session chip timer
+    _tick();
+    _t = Timer.periodic(const Duration(seconds: 30), (_) => _tick());
 
     // 👇 NEW: subscribe to budgets changes start
     BudgetsSync.instance.addListener(_onBudgetsChanged);
@@ -98,13 +104,26 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // initState patch end
 
+  String _fmt(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60);
+    if (h <= 0) return '${m}m';
+    return '${h}h ${m}m';
+  }
+
+  void _tick() {
+    final rem = sessionRemaining();
+    if (!mounted) return;
+    setState(() {
+      _label = rem == null ? '' : 'Session ${_fmt(rem)} left';
+    });
+  }
+
   // 👇 NEW: boot sequence start
   Future<void> _boot() async {
     // Wait briefly for an auth token. If still missing, prompt sign-in.
     await widget.api.waitForToken();
-    final p = await SharedPreferences.getInstance();
-    final t = p.getString('api_jwt') ?? '';
-    if (t.isEmpty) {
+    if (!widget.api.isSignedIn) {
       if (!mounted) return;
       final ok = await Navigator.of(context).push<bool>(
         MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
@@ -487,6 +506,16 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     widget.onSwitchTrip();
   }
 
+  Future<void> _shareInvite() async {
+    final t = _activeTrip;
+    if (t == null) return;
+    final link = widget.api.urlFor('trips/${t.id}/join?token=XYZ').toString();
+    await Share.share(
+      '✈️ Join my trip "${t.name}"\n\nJoin via this link:\n$link',
+      subject: 'Trip Invite: ${t.name}',
+    );
+  }
+
   Future<void> _manageSpendCurrencies() async {
     final trip = _activeTrip;
     if (trip == null) return;
@@ -694,6 +723,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     BudgetsSync.instance.removeListener(_onBudgetsChanged);
+    _t?.cancel();
     super.dispose();
   }
 
@@ -727,7 +757,31 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
     if (t == null) {
       return Scaffold(
-        appBar: AppBar(title: const Text('Dashboard')),
+        appBar: AppBar(
+          title: const Text('Dashboard'),
+          actions: [
+            if (_label.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+                child: Chip(label: Text(_label)),
+              ),
+            // 👇 NEW: Sign out (no-trip state)
+            // dashboard signout action (empty state) start
+            PopupMenuButton<String>(
+              onSelected: (v) async {
+                if (v == 'signout') {
+                  await widget.api.signOut();
+                  if (!mounted) return;
+                  Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
+                }
+              },
+              itemBuilder: (_) => const [
+                PopupMenuItem(value: 'signout', child: Text('Sign out')),
+              ],
+            ),
+            // dashboard signout action (empty state) end
+          ],
+        ),
         body: Center(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -766,6 +820,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         ),
         // AppBar two-line title end
         actions: [
+          if (_label.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+              child: Chip(label: Text(_label)),
+            ),
           // OUTBOX BADGE
           FutureBuilder<int>(
             future: OutboxService.count(),
@@ -828,17 +887,26 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
             },
           ),
           PopupMenuButton<String>(
-            onSelected: (v) {
+            onSelected: (v) async {
               if (v == 'currencies') _manageSpendCurrencies();
               if (v == 'balances') {
                 Navigator.push(context, MaterialPageRoute(
                   builder: (_) => GroupBalanceScreen(tripId: _activeTrip!.id, currency: _activeTrip!.currency, api: widget.api, participants: _activeTrip!.participants, spendCurrencies: _activeTrip!.spendCurrencies),
                 ));
               }
+              if (v == 'signout') {
+                // 👇 NEW: Sign out (main state)
+                // dashboard signout action start
+                await widget.api.signOut();
+                if (!mounted) return;
+                Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
+                // dashboard signout action end
+              }
             },
             itemBuilder: (_) => const [
               PopupMenuItem(value: 'currencies', child: Text('Spend currencies…')),
               PopupMenuItem(value: 'balances', child: Text('View balances')),
+              PopupMenuItem(value: 'signout', child: Text('Sign out')),
             ],
           ),
         ],
@@ -896,11 +964,35 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         // Trip name header start
-                        Text(
-                          _activeTrip!.name,
-                          style: Theme.of(context).textTheme.titleLarge,
+                        Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                _activeTrip!.name,
+                                style: Theme.of(context).textTheme.titleLarge,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                            TextButton.icon(
+                              onPressed: _shareInvite,
+                              icon: const Icon(Icons.person_add_alt_1),
+                              label: const Text('Invite'),
+                            ),
+                          ],
                         ),
                         const SizedBox(height: 6),
+                        // Participants chips
+                        if (_activeTrip!.participants.isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: Wrap(
+                              spacing: 8,
+                              runSpacing: -6,
+                              children: _activeTrip!.participants
+                                  .map((p) => Chip(label: Text(p)))
+                                  .toList(),
+                            ),
+                          ),
                         // Trip name header end
 
                         // --- compute numbers (trip currency) ---
