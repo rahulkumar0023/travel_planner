@@ -298,18 +298,17 @@ Future<void> _ensureTripBudgetForTrip({
       await TripStorageService.save(saved);
       if (!mounted) return;
 
-      // Show ID, and share an invite link (as a plain String)
-      final link = widget.api
-          .urlFor('trips/${saved.id}/join?token=XYZ')
-          .toString();
+      // Show ID, and share an invite link (plain text, no Uri)
+      final tripName = saved.name;
+      final link = '$baseUrl/trips/${saved.id}/join?token=XYZ';
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Trip created (ID: ${saved.id})')),
       );
 
       await Share.share(
-        '✈️ Join my trip "${saved.name}"\n\nJoin via this link:\n$link',
-        subject: 'Trip Invite: ${saved.name}',
+        '✈️ Join my trip "$tripName"\n\n$link',
+        subject: 'Trip Invite: $tripName',
       );
 
       await _refresh();

@@ -509,10 +509,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   Future<void> _shareInvite() async {
     final t = _activeTrip;
     if (t == null) return;
-    final link = widget.api.urlFor('trips/${t.id}/join?token=XYZ').toString();
+    final tripName = t.name;
+    final link = '$baseUrl/trips/${t.id}/join?token=XYZ';
     await Share.share(
-      '✈️ Join my trip "${t.name}"\n\nJoin via this link:\n$link',
-      subject: 'Trip Invite: ${t.name}',
+      '✈️ Join my trip "$tripName"\n\n$link',
+      subject: 'Trip Invite: $tripName',
     );
   }
 
