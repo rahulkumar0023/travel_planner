@@ -2,6 +2,8 @@
 // getGoogleIdToken start
 import 'dart:convert';
 import 'dart:typed_data';
+import 'dart:io' show Platform;
+import 'package:flutter/foundation.dart' show kIsWeb, debugPrint;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:sign_in_with_apple/sign_in_with_apple.dart';
 
@@ -9,20 +11,44 @@ class OAuthService {
   OAuthService._();
   static final instance = OAuthService._();
 
-  // IMPORTANT: set your real "serverClientId" (the Web client ID from Google Cloud console)
+  // IMPORTANT:
+  // - clientId: your iOS OAuth client ID (matches REVERSED_CLIENT_ID in Info.plist)
+  // - serverClientId: your Web OAuth client ID (used to get an ID token for backend)
   final _google = GoogleSignIn(
-    serverClientId: 'YOUR_WEB_OAUTH_CLIENT_ID.apps.googleusercontent.com',
+    clientId: '1009680597431-eiomjfr1s69l0u60hu0f2c91u1tsr90p.apps.googleusercontent.com',
+    // TODO: replace with your Web Client ID from Google Cloud Console
+    serverClientId: '1009680597431-eiomjfr1s69l0u60hu0f2c91u1tsr90p.apps.googleusercontent.com',
     scopes: <String>['email', 'profile'],
   );
 
   /// Returns a Google ID token (JWT) suitable to send to /auth/google
   Future<String> getGoogleIdToken() async {
+    // Verbose logging to help diagnose common iOS crash causes
+    String plat() {
+      if (kIsWeb) return 'web';
+      try {
+        if (Platform.isIOS) return 'iOS';
+        if (Platform.isAndroid) return 'android';
+        if (Platform.isMacOS) return 'macOS';
+        if (Platform.isWindows) return 'windows';
+        if (Platform.isLinux) return 'linux';
+      } catch (_) {}
+      return 'unknown';
+    }
+    String short(String? s) => s == null
+        ? 'null'
+        : (s.length <= 18 ? s : s.substring(0, 18) + '…');
+    debugPrint('[OAuth] Google sign-in start · platform=${plat()} · clientId=${short(_google.clientId)} · serverClientId=${short(_google.serverClientId)}');
+
     final acc = await _google.signIn();
     if (acc == null) throw Exception('Google sign-in cancelled');
+    debugPrint('[OAuth] Google account picked · id=${acc.id} · email=${acc.email}');
     final auth = await acc.authentication;
     final idToken = auth.idToken;
+    final accessToken = auth.accessToken;
+    debugPrint('[OAuth] Google auth · idToken=${idToken == null ? 'null' : 'present(${idToken.length})'} · accessToken=${accessToken == null ? 'null' : 'present(${accessToken.length})'}');
     if (idToken == null || idToken.isEmpty) {
-      throw Exception('Google returned empty idToken. Check serverClientId.');
+      throw Exception('Google returned empty idToken. Ensure serverClientId is your Web Client ID.');
     }
     return idToken;
   }
@@ -48,8 +74,9 @@ extension _MaybeString on Uint8List? {
 }
 
 extension _MaybeB64 on String? {
-  String? decodeB64ToUtf8() =>
-      this == null ? null : utf8.decode(base64Url.decode(this!.padRightBase64()));
+  String? decodeB64ToUtf8() => this == null
+      ? null
+      : utf8.decode(base64Url.decode(this!.padRightBase64()));
 }
 
 extension _AppleJwt on String? {
@@ -57,11 +84,13 @@ extension _AppleJwt on String? {
 }
 
 extension _Opt on String? {
-  String orThrow(String msg) => (this != null && this!.isNotEmpty) ? this! : (throw Exception(msg));
+  String orThrow(String msg) =>
+      (this != null && this!.isNotEmpty) ? this! : (throw Exception(msg));
 }
 
 extension _NonEmpty on String {
-  String requireNonEmpty(String name) => isEmpty ? (throw Exception('$name empty')) : this;
+  String requireNonEmpty(String name) =>
+      isEmpty ? (throw Exception('$name empty')) : this;
 }
 
 extension _AsString on Object? {
@@ -79,7 +108,8 @@ extension _Uint8ListX on Uint8List {
 // Provide a consistent string form of Apple's identityToken across SDK changes.
 extension _IdTokenX on AuthorizationCredentialAppleID {
   String? get identityTokenString {
-    final Object? t = identityToken; // may be String? or bytes depending on plugin version
+    final Object? t =
+        identityToken; // may be String? or bytes depending on plugin version
     if (t == null) return null;
     if (t is String) return t;
     if (t is List<int>) return base64Url.encode(t);
@@ -105,12 +135,14 @@ extension _NullableString on String? {
 }
 
 extension _Ensure on String? {
-  String ensure(String name) => isBlank ? (throw Exception('$name missing')) : this!;
+  String ensure(String name) =>
+      isBlank ? (throw Exception('$name missing')) : this!;
 }
 
 extension _JwtEnsure on String {
-  String ensureJwt() =>
-      (split('.').length == 3) ? this : (throw Exception('identityToken does not look like a JWT'));
+  String ensureJwt() => (split('.').length == 3)
+      ? this
+      : (throw Exception('identityToken does not look like a JWT'));
 }
 
 extension _LogHint on String {
@@ -122,11 +154,14 @@ extension _Noop on String {
 }
 
 extension _Check on String {
-  void check(bool cond, String msg) { if (!cond) throw Exception(msg); }
+  void check(bool cond, String msg) {
+    if (!cond) throw Exception(msg);
+  }
 }
 
 extension _Maybe on String? {
-  String or(String fallback) => (this == null || this!.isEmpty) ? fallback : this!;
+  String or(String fallback) =>
+      (this == null || this!.isEmpty) ? fallback : this!;
 }
 
 extension _Jwt on String {
@@ -136,7 +171,8 @@ extension _Jwt on String {
 }
 
 extension _Apple on AuthorizationCredentialAppleID {
-  bool get hasIdentityToken => identityToken != null && identityToken!.isNotEmpty;
+  bool get hasIdentityToken =>
+      identityToken != null && identityToken!.isNotEmpty;
 }
 
 extension _AppleAuth on SignInWithApple {
@@ -149,18 +185,22 @@ extension _AppleAuth on SignInWithApple {
 
 extension AppleFlow on OAuthService {
   Future<String> getAppleIdentityToken() async {
+    debugPrint('[OAuth] Apple sign-in start');
     final cred = await SignInWithApple.getAppleIDCredential(scopes: [
       AppleIDAuthorizationScopes.email,
       AppleIDAuthorizationScopes.fullName,
     ]);
+    debugPrint('[OAuth] Apple credential received · user=' + (cred.userIdentifier ?? '(null)'));
     final idToken = cred.identityTokenString;
     if (idToken == null || idToken.isEmpty) {
-      throw Exception('Apple returned empty identityToken — test on a real iOS device and ensure the capability is configured.');
+      throw Exception(
+          'Apple returned empty identityToken — test on a real iOS device and ensure the capability is configured.');
     }
     // sanity check it's a JWT (header.payload.signature)
     if (idToken.split('.').length != 3) {
       throw Exception('Apple identityToken not a valid JWT format');
     }
+    debugPrint('[OAuth] Apple identityToken present (' + idToken.length.toString() + ' chars)');
     return idToken;
   }
 }

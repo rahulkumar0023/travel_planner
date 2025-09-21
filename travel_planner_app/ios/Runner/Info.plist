@@ -44,10 +44,24 @@
                 <string>UIInterfaceOrientationPortraitUpsideDown</string>
                 <string>UIInterfaceOrientationLandscapeLeft</string>
                 <string>UIInterfaceOrientationLandscapeRight</string>
-        </array>
+</array>
         <key>NSCameraUsageDescription</key>
         <string>Allow to take receipt photos.</string>
         <key>NSPhotoLibraryUsageDescription</key>
         <string>Allow to pick receipt photos from library.</string>
+        
+        <!-- URL scheme for Google Sign-In (REVERSED_CLIENT_ID) -->
+        <key>CFBundleURLTypes</key>
+        <array>
+                <dict>
+                        <key>CFBundleTypeRole</key>
+                        <string>Editor</string>
+                        <key>CFBundleURLSchemes</key>
+                        <array>
+                                <!-- Must match your REVERSED_CLIENT_ID from the iOS OAuth client -->
+                                <string>com.googleusercontent.apps.1009680597431-eiomjfr1s69l0u60hu0f2c91u1tsr90p</string>
+                        </array>
+                </dict>
+        </array>
 </dict>
 </plist>

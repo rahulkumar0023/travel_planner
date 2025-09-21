@@ -99,16 +99,32 @@ class _SignInScreenState extends State<SignInScreen> {
                 padding: const EdgeInsets.only(bottom: 12),
                 child: Text(_error!, style: TextStyle(color: Colors.red.shade400)),
               ),
-            FilledButton.icon(
-              onPressed: _busy ? null : _google,
-              icon: const Icon(Icons.login),
-              label: const Text('Continue with Google'),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _busy ? null : _google,
+                icon: const Icon(Icons.login),
+                label: const Flexible(
+                  child: Text(
+                    'Continue with Google',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
-            FilledButton.icon(
-              onPressed: _busy ? null : _apple,
-              icon: const Icon(Icons.apple),
-              label: const Text('Continue with Apple'),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _busy ? null : _apple,
+                icon: const Icon(Icons.apple),
+                label: const Flexible(
+                  child: Text(
+                    'Continue with Apple',
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ),
             ),
             const SizedBox(height: 12),
             // 👇 NEW: UI buttons (put inside your build method's widget tree, e.g., in a Column)

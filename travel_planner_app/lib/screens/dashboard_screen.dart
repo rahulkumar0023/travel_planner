@@ -821,94 +821,104 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         ),
         // AppBar two-line title end
         actions: [
-          if (_label.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
-              child: Chip(label: Text(_label)),
-            ),
-          // OUTBOX BADGE
-          FutureBuilder<int>(
-            future: OutboxService.count(),
-            builder: (_, snap) {
-              final cnt = snap.data ?? 0;
-              return Stack(
-                clipBehavior: Clip.none,
+          // Make actions horizontally scrollable to avoid RenderFlex overflow
+          Flexible(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
                 children: [
-                  IconButton(
-                    tooltip: cnt == 0 ? 'All synced' : 'Pending sync',
-                    onPressed: _flushOutbox,
-                    icon: Icon(cnt == 0 ? Icons.cloud_done_outlined : Icons.cloud_off_outlined),
-                  ),
-                  if (cnt > 0)
-                    Positioned(
-                      right: 10,
-                      top: 10,
-                      child: Container(
-                        width: 8,
-                        height: 8,
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.error,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
+                  if (_label.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+                      child: Chip(label: Text(_label)),
                     ),
+                  // OUTBOX BADGE
+                  FutureBuilder<int>(
+                    future: OutboxService.count(),
+                    builder: (_, snap) {
+                      final cnt = snap.data ?? 0;
+                      return Stack(
+                        clipBehavior: Clip.none,
+                        children: [
+                          IconButton(
+                            tooltip: cnt == 0 ? 'All synced' : 'Pending sync',
+                            onPressed: _flushOutbox,
+                            icon: Icon(cnt == 0 ? Icons.cloud_done_outlined : Icons.cloud_off_outlined),
+                          ),
+                          if (cnt > 0)
+                            Positioned(
+                              right: 10,
+                              top: 10,
+                              child: Container(
+                                width: 8,
+                                height: 8,
+                                decoration: BoxDecoration(
+                                  color: Theme.of(context).colorScheme.error,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                            ),
+                        ],
+                      );
+                    },
+                  ),
+                  IconButton(
+                    onPressed: _openTripPicker,
+                    icon: const Icon(Icons.swap_horiz),
+                  ),
+                  IconButton(
+                    onPressed: _clearTripSelection,
+                    icon: const Icon(Icons.logout),
+                  ),
+                  IconButton(
+                    tooltip: 'Settings',
+                    icon: const Icon(Icons.settings_outlined),
+                    onPressed: () {
+                      Navigator.of(context).push(
+                        MaterialPageRoute(
+                          builder: (_) => SettingsScreen(api: widget.api),
+                        ),
+                      );
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.group_outlined),
+                    tooltip: 'Participants',
+                    onPressed: () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ParticipantsScreen(tripId: t.id),
+                        ),
+                      );
+                    },
+                  ),
+                  PopupMenuButton<String>(
+                    onSelected: (v) async {
+                      if (v == 'currencies') _manageSpendCurrencies();
+                      if (v == 'balances') {
+                        Navigator.push(context, MaterialPageRoute(
+                          builder: (_) => GroupBalanceScreen(tripId: _activeTrip!.id, currency: _activeTrip!.currency, api: widget.api, participants: _activeTrip!.participants, spendCurrencies: _activeTrip!.spendCurrencies),
+                        ));
+                      }
+                      if (v == 'signout') {
+                        // 👇 NEW: Sign out (main state)
+                        // dashboard signout action start
+                        await widget.api.signOut();
+                        if (!mounted) return;
+                        Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
+                        // dashboard signout action end
+                      }
+                    },
+                    itemBuilder: (_) => const [
+                      PopupMenuItem(value: 'currencies', child: Text('Spend currencies…')),
+                      PopupMenuItem(value: 'balances', child: Text('View balances')),
+                      PopupMenuItem(value: 'signout', child: Text('Sign out')),
+                    ],
+                  ),
                 ],
-              );
-            },
-          ),
-          IconButton(
-            onPressed: _openTripPicker,
-            icon: const Icon(Icons.swap_horiz),
-          ),
-          IconButton(
-            onPressed: _clearTripSelection,
-            icon: const Icon(Icons.logout),
-          ),
-          IconButton(
-            tooltip: 'Settings',
-            icon: const Icon(Icons.settings_outlined),
-            onPressed: () {
-              Navigator.of(context).push(
-                MaterialPageRoute(
-                  builder: (_) => SettingsScreen(api: widget.api),
-                ),
-              );
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.group_outlined),
-            tooltip: 'Participants',
-            onPressed: () {
-              Navigator.push(
-                context,
-                MaterialPageRoute(
-                  builder: (_) => ParticipantsScreen(tripId: t.id),
-                ),
-              );
-            },
-          ),
-          PopupMenuButton<String>(
-            onSelected: (v) async {
-              if (v == 'currencies') _manageSpendCurrencies();
-              if (v == 'balances') {
-                Navigator.push(context, MaterialPageRoute(
-                  builder: (_) => GroupBalanceScreen(tripId: _activeTrip!.id, currency: _activeTrip!.currency, api: widget.api, participants: _activeTrip!.participants, spendCurrencies: _activeTrip!.spendCurrencies),
-                ));
-              }
-              if (v == 'signout') {
-                // 👇 NEW: Sign out (main state)
-                // dashboard signout action start
-                await widget.api.signOut();
-                if (!mounted) return;
-                Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
-                // dashboard signout action end
-              }
-            },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'currencies', child: Text('Spend currencies…')),
-              PopupMenuItem(value: 'balances', child: Text('View balances')),
-              PopupMenuItem(value: 'signout', child: Text('Sign out')),
-            ],
+              ),
+            ),
           ),
         ],
       ),
