@@ -6,9 +6,9 @@ import 'screens/app_shell.dart';
 import 'screens/sign_in_screen.dart';
 import 'services/api_service.dart';
 import 'services/trip_storage_service.dart';
-import 'services/hive_migrations.dart';
 import 'services/monthly_store.dart';
 import 'app_nav.dart';
+import 'services/deep_link_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -27,6 +27,7 @@ Future<void> main() async {
   await TripStorageService.init();
 
   final api = ApiService();
+  await DeepLinkService.instance.ensureStarted();
   // Decide initial route based on restored session
   final restored = await api.restoreSession();
   final startRoute = restored ? '/home' : '/sign-in';
@@ -37,7 +38,8 @@ Future<void> main() async {
 class TravelPlannerApp extends StatelessWidget {
   final ApiService api;
   final String initialRoute;
-  const TravelPlannerApp({super.key, required this.api, required this.initialRoute});
+  const TravelPlannerApp(
+      {super.key, required this.api, required this.initialRoute});
 
   @override
   Widget build(BuildContext context) {

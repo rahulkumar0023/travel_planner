@@ -44,7 +44,8 @@ Map<String, dynamic> _decodeJwtPayload(String jwt) {
   try {
     final parts = jwt.split('.');
     if (parts.length != 3) return {};
-    String normalized(String s) => s.padRight(s.length + (4 - s.length % 4) % 4, '=');
+    String normalized(String s) =>
+        s.padRight(s.length + (4 - s.length % 4) % 4, '=');
     final payload = utf8.decode(base64Url.decode(normalized(parts[1])));
     final map = (jsonDecode(payload) as Map).cast<String, dynamic>();
     return map;
@@ -63,7 +64,8 @@ Duration? sessionRemaining() {
 // baseUrl start
 String get baseUrl {
   if (kIsWeb) return 'http://192.168.0.39:8080';
-  if (Platform.isAndroid) return 'http://10.0.2.2:8080'; // Android emulator → host Mac
+  if (Platform.isAndroid)
+    return 'http://10.0.2.2:8080'; // Android emulator → host Mac
   return 'http://192.168.0.39:8080'; // iOS simulator / macOS
 }
 // baseUrl end
@@ -98,7 +100,9 @@ void setAuthToken(String? token, {String? email, String? userId}) async {
     final payload = _decodeJwtPayload(_jwt!);
     final exp = payload['exp'];
     if (exp is int) {
-      _sessionExpiry = DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true).toLocal();
+      _sessionExpiry =
+          DateTime.fromMillisecondsSinceEpoch(exp * 1000, isUtc: true)
+              .toLocal();
       final delay = _sessionExpiry!.difference(DateTime.now());
       if (!delay.isNegative) {
         _expiryTimer = Timer(delay + const Duration(seconds: 1), () {
@@ -164,8 +168,8 @@ void _onAuthFailed() {
 }
 
 void _guardAuthResponse(int statusCode) {
-  if (statusCode == 401 || statusCode == 403) {
-    debugPrint('[Auth] $statusCode received — forcing sign-out');
+  if (statusCode == 401) {
+    debugPrint('[Auth] 401 received — forcing sign-out');
     _onAuthFailed();
   }
 }
@@ -213,7 +217,8 @@ class ApiService {
   // _authHeadersRequired end
 
   // 👇 NEW: await token before screens fire requests
-  Future<void> waitForToken({Duration timeout = const Duration(seconds: 8)}) async {
+  Future<void> waitForToken(
+      {Duration timeout = const Duration(seconds: 8)}) async {
     // Wait up to [timeout] for a token to appear in SharedPreferences.
     // Do not throw on timeout; callers can check presence separately.
     final deadline = DateTime.now().add(timeout);
@@ -245,7 +250,8 @@ class ApiService {
   // getMe start
   Future<Map<String, dynamic>> getMe() async {
     final url = Uri.parse('${baseUrl}/auth/me');
-    final res = await _sendWithGuard(http.get(url, headers: await _authHeadersRequired()));
+    final res = await _sendWithGuard(
+        http.get(url, headers: await _authHeadersRequired()));
     if (res.statusCode != 200) {
       throw Exception('GET /auth/me failed ${res.statusCode}: ${res.body}');
     }
@@ -297,7 +303,8 @@ class ApiService {
   Future<bool> validateToken() async {
     try {
       final url = Uri.parse(_u('auth/me'));
-      final res = await _sendWithGuard(http.get(url, headers: await _authHeadersRequired()));
+      final res = await _sendWithGuard(
+          http.get(url, headers: await _authHeadersRequired()));
       if (res.statusCode == 200) return true;
     } catch (_) {
       // fall through to clear
@@ -374,9 +381,10 @@ class ApiService {
   // 👇 OPTIONAL: helper to login (dev) then fetch profile and persist userId/email
   // signInDevAndFetch start
   Future<void> signInDevAndFetch(String email) async {
-    await loginDev(email: email);                 // uses your /auth/dev
-    final me = await getMe();                     // calls /auth/me using the new jwt
-    setAuthToken(_jwt, email: me['email'] as String?, userId: me['userId'] as String?);
+    await loginDev(email: email); // uses your /auth/dev
+    final me = await getMe(); // calls /auth/me using the new jwt
+    setAuthToken(_jwt,
+        email: me['email'] as String?, userId: me['userId'] as String?);
   }
   // signInDevAndFetch end
 
@@ -384,7 +392,8 @@ class ApiService {
   // Trips
   // -----------------------------
   Future<List<Trip>> fetchTrips() async {
-    final res = await _sendWithGuard(http.get(Uri.parse(_u('trips')), headers: await _authHeadersRequired()));
+    final res = await _sendWithGuard(http.get(Uri.parse(_u('trips')),
+        headers: await _authHeadersRequired()));
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
       return data.map((e) => Trip.fromJson(e)).toList();
@@ -392,7 +401,8 @@ class ApiService {
     throw Exception('Failed to load trips (${res.statusCode})');
   }
 
-  Future<List<Trip>> fetchTripsOrCache({Duration timeout = const Duration(seconds: 5)}) async {
+  Future<List<Trip>> fetchTripsOrCache(
+      {Duration timeout = const Duration(seconds: 5)}) async {
     lastTripsFromCache = false;
     try {
       final res = await fetchTrips().timeout(timeout);
@@ -451,20 +461,35 @@ class ApiService {
             try {
               final map = (jsonDecode(res.body) as Map).cast<String, dynamic>();
               // If backend returns a full Trip, use it; otherwise synthesize.
-              if (map.containsKey('startDate') && map.containsKey('endDate') && map.containsKey('initialBudget')) {
+              if (map.containsKey('startDate') &&
+                  map.containsKey('endDate') &&
+                  map.containsKey('initialBudget')) {
                 return Trip.fromJson(map);
               }
-              final id = (map['id'] ?? map['tripId'] ?? map['uuid'] ?? '').toString();
-              final participants = (map['participants'] as List?)?.cast<String>() ?? const <String>[];
+              final id =
+                  (map['id'] ?? map['tripId'] ?? map['uuid'] ?? '').toString();
+              final participants =
+                  (map['participants'] as List?)?.cast<String>() ??
+                      const <String>[];
               return Trip(
-                id: id.isNotEmpty ? id : DateTime.now().millisecondsSinceEpoch.toString(),
+                id: id.isNotEmpty
+                    ? id
+                    : DateTime.now().millisecondsSinceEpoch.toString(),
                 name: map['name']?.toString() ?? name,
                 startDate: DateTime.now(),
                 endDate: DateTime.now().add(const Duration(days: 3)),
-                currency: (map['currency']?.toString() ?? currency).toUpperCase(),
-                initialBudget: (map['initialBudget'] as num?)?.toDouble() ?? 0.0,
+                currency:
+                    (map['currency']?.toString() ?? currency).toUpperCase(),
+                initialBudget:
+                    (map['initialBudget'] as num?)?.toDouble() ?? 0.0,
                 participants: participants,
                 spendCurrencies: const [],
+                notes: () {
+                  final raw = map['notes'] as String?;
+                  if (raw == null) return null;
+                  final trimmed = raw.trim();
+                  return trimmed.isEmpty ? null : trimmed;
+                }(),
               );
             } catch (_) {
               // fall through to synthesis below
@@ -484,20 +509,24 @@ class ApiService {
             initialBudget: 0,
             participants: const [],
             spendCurrencies: const [],
+            notes: null,
           );
         }
         // keep trying alternate endpoints on 404
         if (res.statusCode != 404) {
-          lastErr = Exception('Create group trip failed @ $u: ${res.statusCode} ${res.body}');
+          lastErr = Exception(
+              'Create group trip failed @ $u: ${res.statusCode} ${res.body}');
         }
       } catch (e) {
         lastErr = Exception('Create group trip error @ $u: $e');
       }
     }
     if (lastRes != null) {
-      throw Exception('Create group trip failed: ${lastRes.statusCode} ${lastRes.body}');
+      throw Exception(
+          'Create group trip failed: ${lastRes.statusCode} ${lastRes.body}');
     }
-    throw lastErr ?? Exception('Create group trip failed: no endpoint available');
+    throw lastErr ??
+        Exception('Create group trip failed: no endpoint available');
   }
 
   /// Join an existing trip using an invite token.
@@ -505,7 +534,7 @@ class ApiService {
     final attempts = <({String method, String url, bool useQuery})>[
       (method: 'POST', url: _u('trips/$tripId/join'), useQuery: false),
       (method: 'POST', url: _u('api/trips/$tripId/join'), useQuery: false),
-      (method: 'GET',  url: _u('trips/$tripId/join'), useQuery: true),
+      (method: 'GET', url: _u('trips/$tripId/join'), useQuery: true),
     ];
 
     Exception? lastErr;
@@ -517,13 +546,18 @@ class ApiService {
         final res = await _sendWithGuard(
           a.method == 'GET'
               ? http.get(uri, headers: await _authHeadersRequired())
-              : http.post(uri, headers: await _authHeadersRequired(), body: jsonEncode({'token': token})),
+              : http.post(uri,
+                  headers: await _authHeadersRequired(),
+                  body: jsonEncode({'token': token})),
         );
-        if (res.statusCode == 200 || res.statusCode == 201 || res.statusCode == 204) {
+        if (res.statusCode == 200 ||
+            res.statusCode == 201 ||
+            res.statusCode == 204) {
           return;
         }
         if (res.statusCode != 404) {
-          lastErr = Exception('Join trip failed @ ${a.method} ${a.url}: ${res.statusCode} ${res.body}');
+          lastErr = Exception(
+              'Join trip failed @ ${a.method} ${a.url}: ${res.statusCode} ${res.body}');
         }
       } catch (e) {
         lastErr = Exception('Join trip error @ ${a.method} ${a.url}: $e');
@@ -545,7 +579,8 @@ class ApiService {
   }
 
   Future<void> deleteTrip(String id) async {
-    final res = await _sendWithGuard(http.delete(Uri.parse(_u('trips/$id')), headers: await _authHeadersRequired()));
+    final res = await _sendWithGuard(http.delete(Uri.parse(_u('trips/$id')),
+        headers: await _authHeadersRequired()));
     if (res.statusCode != 204 && res.statusCode != 200) {
       throw Exception('Failed to delete trip (${res.statusCode}) ${res.body}');
     }
@@ -579,21 +614,23 @@ class ApiService {
 
   Future<Expense> updateExpense(Expense e) async {
     final uri = Uri.parse(_u('expenses/${e.id}'));
-    final res = await _sendWithGuard(http.put(uri, headers: await _authHeadersRequired(), body: jsonEncode(e.toJson())));
+    final res = await _sendWithGuard(http.put(uri,
+        headers: await _authHeadersRequired(), body: jsonEncode(e.toJson())));
     if (res.statusCode != 200) {
-      throw Exception('Failed to update expense (${res.statusCode}) ${res.body}');
+      throw Exception(
+          'Failed to update expense (${res.statusCode}) ${res.body}');
     }
     return Expense.fromJson(jsonDecode(res.body));
   }
 
-
   Future<void> deleteExpense(String id) async {
-    final res = await _sendWithGuard(http.delete(Uri.parse(_u('expenses/$id')), headers: await _authHeadersRequired()));
+    final res = await _sendWithGuard(http.delete(Uri.parse(_u('expenses/$id')),
+        headers: await _authHeadersRequired()));
     if (res.statusCode != 204 && res.statusCode != 200) {
-      throw Exception('Failed to delete expense (${res.statusCode}) ${res.body}');
+      throw Exception(
+          'Failed to delete expense (${res.statusCode}) ${res.body}');
     }
   }
-
 
   // -----------------------------
   // Balances + Settle Up
@@ -717,7 +754,8 @@ class ApiService {
         'amount': amount.toString(),
       },
     );
-    final res = await _sendWithGuard(http.get(uri, headers: await _authHeadersRequired()));
+    final res = await _sendWithGuard(
+        http.get(uri, headers: await _authHeadersRequired()));
     if (res.statusCode != 200) {
       if (kDebugMode) {
         debugPrint('convert(raw) HTTP ${res.statusCode}: ${res.body}');
@@ -766,7 +804,8 @@ class ApiService {
   }
 
   /// Same as fetchBudgets but with a timeout and cache fallback.
-  Future<List<Budget>> fetchBudgetsOrCache({Duration timeout = const Duration(seconds: 5)}) async {
+  Future<List<Budget>> fetchBudgetsOrCache(
+      {Duration timeout = const Duration(seconds: 5)}) async {
     lastBudgetsFromCache = false;
     try {
       final network = await fetchBudgets().timeout(timeout);
@@ -781,7 +820,6 @@ class ApiService {
       return cached;
     }
   }
-
 
   //create Budget start
   Future<Budget> createBudget({
@@ -806,11 +844,20 @@ class ApiService {
     // Try common REST variants in order
     final endpoints = <String>[
       _u('budgets'),
-      if (kind == BudgetKind.monthly) _u('budgets/monthly') else _u('budgets/trip'),
+      if (kind == BudgetKind.monthly)
+        _u('budgets/monthly')
+      else
+        _u('budgets/trip'),
       _u('budget'),
-      if (kind == BudgetKind.monthly) _u('budget/monthly') else _u('budget/trip'),
+      if (kind == BudgetKind.monthly)
+        _u('budget/monthly')
+      else
+        _u('budget/trip'),
       _u('api/budgets'),
-      if (kind == BudgetKind.monthly) _u('api/budgets/monthly') else _u('api/budgets/trip'),
+      if (kind == BudgetKind.monthly)
+        _u('api/budgets/monthly')
+      else
+        _u('api/budgets/trip'),
     ];
 
     Exception? lastError;
@@ -828,14 +875,14 @@ class ApiService {
           late final Budget created;
           if (res.body.isNotEmpty) {
             final map = jsonDecode(res.body) as Map<String, dynamic>;
-            created =  Budget.fromJson(map);
+            created = Budget.fromJson(map);
           } else {
             // Success without body → synthesize from payload + Location header if present
             final loc = res.headers['location'];
             final id = (loc != null && loc.trim().isNotEmpty)
                 ? loc.split('/').last
                 : DateTime.now().millisecondsSinceEpoch.toString();
-            created =  Budget(
+            created = Budget(
               id: id,
               kind: kind,
               currency: currency,
@@ -860,7 +907,8 @@ class ApiService {
         // On 401/403: clear token and stop trying other endpoints
         if (res.statusCode == 401 || res.statusCode == 403) {
           setAuthToken(null);
-          lastError = Exception('Unauthorized (${res.statusCode}). Please sign in again.');
+          lastError = Exception(
+              'Unauthorized (${res.statusCode}). Please sign in again.');
           break;
         }
 
@@ -901,13 +949,17 @@ class ApiService {
       if (month != null) 'month': month,
       if (tripId != null) 'tripId': tripId,
       if (name != null) 'name': name,
-      if (linkedMonthlyBudgetId != null) 'linkedMonthlyBudgetId': linkedMonthlyBudgetId,
+      if (linkedMonthlyBudgetId != null)
+        'linkedMonthlyBudgetId': linkedMonthlyBudgetId,
     };
 
     final endpoints = <({String method, String url})>[
       (method: 'PUT', url: _u('budgets/$id')),
       (method: 'PATCH', url: _u('budgets/$id')),
-      (method: 'POST', url: _u('budgets/$id')), // some APIs accept POST for update
+      (
+        method: 'POST',
+        url: _u('budgets/$id')
+      ), // some APIs accept POST for update
       (method: 'PUT', url: _u('budget/$id')),
     ];
 
@@ -915,23 +967,31 @@ class ApiService {
     for (final e in endpoints) {
       try {
         final uri = Uri.parse(e.url);
-        final res = await _sendWithGuard(
-            e.method == 'PUT' ? http.put(uri, headers: await _authHeadersRequired(), body: jsonEncode(payload)) :
-            e.method == 'PATCH' ? http.patch(uri, headers: await _authHeadersRequired(), body: jsonEncode(payload)) :
-            http.post(uri, headers: await _authHeadersRequired(), body: jsonEncode(payload))
-        );
+        final res = await _sendWithGuard(e.method == 'PUT'
+            ? http.put(uri,
+                headers: await _authHeadersRequired(),
+                body: jsonEncode(payload))
+            : e.method == 'PATCH'
+                ? http.patch(uri,
+                    headers: await _authHeadersRequired(),
+                    body: jsonEncode(payload))
+                : http.post(uri,
+                    headers: await _authHeadersRequired(),
+                    body: jsonEncode(payload)));
         if (res.statusCode == 200) {
           final map = jsonDecode(res.body) as Map<String, dynamic>;
           final updated = Budget.fromJson(map);
           // 👇 NEW
           () async {
             final list = await LocalBudgetStore.load();
-            final next = list.where((b) => b.id != updated.id).toList()..add(updated);
+            final next = list.where((b) => b.id != updated.id).toList()
+              ..add(updated);
             await LocalBudgetStore.save(next);
           }();
           return updated;
         }
-        if (res.statusCode == 204 || (res.statusCode == 201 && res.body.isEmpty)) {
+        if (res.statusCode == 204 ||
+            (res.statusCode == 201 && res.body.isEmpty)) {
           // No body — synthesize from payload
           return Budget(
             id: id,
@@ -946,10 +1006,12 @@ class ApiService {
           );
         }
         if (res.statusCode != 404) {
-          lastError = Exception('Update budget failed @ ${e.method} ${e.url}: ${res.statusCode} ${res.body}');
+          lastError = Exception(
+              'Update budget failed @ ${e.method} ${e.url}: ${res.statusCode} ${res.body}');
         }
       } catch (err) {
-        lastError = Exception('Update budget error @ ${e.method} ${e.url}: $err');
+        lastError =
+            Exception('Update budget error @ ${e.method} ${e.url}: $err');
       }
     }
     throw lastError ?? Exception('Update budget failed: endpoint not found');
@@ -968,11 +1030,12 @@ class ApiService {
     for (final a in attempts) {
       try {
         final uri = Uri.parse(a.url);
-        final res = await _sendWithGuard(
-            a.method == 'DELETE' ? http.delete(uri, headers: await _authHeadersRequired()) :
-            http.post(uri, headers: await _authHeadersRequired())
-        );
-        if (res.statusCode == 200 || res.statusCode == 202 || res.statusCode == 204) {
+        final res = await _sendWithGuard(a.method == 'DELETE'
+            ? http.delete(uri, headers: await _authHeadersRequired())
+            : http.post(uri, headers: await _authHeadersRequired()));
+        if (res.statusCode == 200 ||
+            res.statusCode == 202 ||
+            res.statusCode == 204) {
           // deleteBudget: inside the success branch (200/202/204):
           () async {
             final list = await LocalBudgetStore.load();
@@ -981,10 +1044,12 @@ class ApiService {
           return;
         }
         if (res.statusCode != 404) {
-          lastError = Exception('Delete budget failed @ ${a.method} ${a.url}: ${res.statusCode} ${res.body}');
+          lastError = Exception(
+              'Delete budget failed @ ${a.method} ${a.url}: ${res.statusCode} ${res.body}');
         }
       } catch (err) {
-        lastError = Exception('Delete budget error @ ${a.method} ${a.url}: $err');
+        lastError =
+            Exception('Delete budget error @ ${a.method} ${a.url}: $err');
       }
     }
     throw lastError ?? Exception('Delete budget failed: endpoint not found');
@@ -1039,9 +1104,11 @@ class ApiService {
     if (res.statusCode != 200 && res.statusCode != 204) {
       () async {
         final list = await LocalBudgetStore.load();
-        final next = list.map((b) =>
-        b.id == tripBudgetId ? b.copyWith(linkedMonthlyBudgetId: null) : b
-        ).toList();
+        final next = list
+            .map((b) => b.id == tripBudgetId
+                ? b.copyWith(linkedMonthlyBudgetId: null)
+                : b)
+            .toList();
         await LocalBudgetStore.save(next);
       }();
       throw Exception('Unlink failed: ${res.statusCode} ${res.body}');
@@ -1051,7 +1118,8 @@ class ApiService {
 
   // ---- Monthly helpers start ----
   DateTime _startOfMonth(DateTime d) => DateTime(d.year, d.month, 1);
-  DateTime _endOfMonth(DateTime d)   => DateTime(d.year, d.month + 1, 0, 23, 59, 59, 999);
+  DateTime _endOfMonth(DateTime d) =>
+      DateTime(d.year, d.month + 1, 0, 23, 59, 59, 999);
 
   /// Build EnvelopeVM list for the given month from:
   /// - Monthly budgets (kind=monthly, year/month match)
@@ -1062,47 +1130,74 @@ class ApiService {
     final monthlyCurrencyFallback = TripStorageService.getHomeCurrency();
     // 1) load all budgets (server or cache)
     final budgets = await fetchBudgetsOrCache();
-    final monthlies = budgets.where((b) =>
-      b.kind == BudgetKind.monthly &&
-      b.year == mm.year && b.month == mm.month).toList();
+    final monthlies = budgets
+        .where((b) =>
+            b.kind == BudgetKind.monthly &&
+            b.year == mm.year &&
+            b.month == mm.month)
+        .toList();
 
     // 2) for each monthly, find linked trip budgets
     final List<EnvelopeVM> out = [];
     int idx = 0;
     for (final m in monthlies) {
-      final linkedTripBudgets = budgets.where((b) =>
-        b.kind == BudgetKind.trip && b.linkedMonthlyBudgetId == m.id).toList();
+      final linkedTripBudgets = budgets
+          .where((b) =>
+              b.kind == BudgetKind.trip && b.linkedMonthlyBudgetId == m.id)
+          .toList();
 
       // collect tripIds
-      final tripIds = linkedTripBudgets.map((t) => t.tripId).whereType<String>().toSet();
+      final tripIds =
+          linkedTripBudgets.map((t) => t.tripId).whereType<String>().toSet();
 
       // 3) sum expenses for those trips within the month, convert each to monthly currency
       final start = _startOfMonth(mm).toUtc();
-      final end   = _endOfMonth(mm).toUtc();
+      final end = _endOfMonth(mm).toUtc();
       double spent = 0.0;
 
       for (final tripId in tripIds) {
         final expenses = await fetchExpenses(tripId);
         // choose a budget currency when an expense is missing a currency
-        final defaultTripCcy = linkedTripBudgets.firstWhere((t) => t.tripId == tripId,
-                                orElse: () => linkedTripBudgets.first).currency;
+        final defaultTripCcy = linkedTripBudgets
+            .firstWhere((t) => t.tripId == tripId,
+                orElse: () => linkedTripBudgets.first)
+            .currency;
         for (final e in expenses) {
           final dt = e.date.toUtc();
           if (dt.isBefore(start) || dt.isAfter(end)) continue;
-          final from = (e.currency.isEmpty ? defaultTripCcy : e.currency).toUpperCase();
-          final to   = (m.currency.isEmpty ? monthlyCurrencyFallback : m.currency).toUpperCase();
+          final from =
+              (e.currency.isEmpty ? defaultTripCcy : e.currency).toUpperCase();
+          final to = (m.currency.isEmpty ? monthlyCurrencyFallback : m.currency)
+              .toUpperCase();
           if (from == to) {
             spent += e.amount;
           } else {
-            try { spent += await convert(amount: e.amount, from: from, to: to); }
-            catch (_) { spent += e.amount; } // safe fallback
+            try {
+              spent += await convert(amount: e.amount, from: from, to: to);
+            } catch (_) {
+              spent += e.amount;
+            } // safe fallback
           }
         }
       }
 
       final name = (m.name?.isNotEmpty == true)
-        ? m.name!
-        : '${['','Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][m.month ?? 0]} ${m.year ?? ''}';
+          ? m.name!
+          : '${[
+              '',
+              'Jan',
+              'Feb',
+              'Mar',
+              'Apr',
+              'May',
+              'Jun',
+              'Jul',
+              'Aug',
+              'Sep',
+              'Oct',
+              'Nov',
+              'Dec'
+            ][m.month ?? 0]} ${m.year ?? ''}';
 
       out.add(EnvelopeVM(
         id: m.id,
@@ -1114,13 +1209,15 @@ class ApiService {
       ));
     }
     // Sort by most recent/descending budgeted by default
-    out.sort((a,b) => b.planned.compareTo(a.planned));
+    out.sort((a, b) => b.planned.compareTo(a.planned));
     return out;
   }
 
   Future<MonthlyBudgetSummary> fetchMonthlySummary(DateTime month) async {
     final envs = await fetchMonthlyEnvelopes(month);
-    final ccy = envs.isNotEmpty ? envs.first.currency : TripStorageService.getHomeCurrency();
+    final ccy = envs.isNotEmpty
+        ? envs.first.currency
+        : TripStorageService.getHomeCurrency();
     final totalPlanned = envs.fold<double>(0.0, (p, e) => p + e.planned);
 
     // Load month-local transactions and convert to monthly currency if needed
@@ -1161,5 +1258,4 @@ class ApiService {
     );
   }
   // ---- Monthly helpers end ----
-
 }

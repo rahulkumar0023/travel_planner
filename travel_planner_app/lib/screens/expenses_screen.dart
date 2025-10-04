@@ -31,7 +31,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   List<Expense> _all = [];
 
   // convenience: detect “any filter active”
-  bool get _hasFilters => _fCategory != null || _fCurrency != null || _fRange != null;
+  bool get _hasFilters =>
+      _fCategory != null || _fCurrency != null || _fRange != null;
 
   // quick access to active trip currency (safe)
   String get _tripCcy => _trip?.currency.toUpperCase() ?? 'EUR';
@@ -73,20 +74,105 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     });
   }
 
+  Future<void> _editExpense(Expense expense) async {
+    final tagsCtrl = TextEditingController(text: expense.tags.join(', '));
+    final result = await showDialog<List<String>>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Edit Expense'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(expense.title, style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            TextField(
+              controller: tagsCtrl,
+              decoration: const InputDecoration(
+                labelText: 'Tags (comma separated)',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              final tags = tagsCtrl.text
+                  .split(',')
+                  .map((t) => t.trim())
+                  .where((t) => t.isNotEmpty)
+                  .toSet()
+                  .toList();
+              Navigator.pop(ctx, tags);
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+    tagsCtrl.dispose();
+    if (result == null) return;
+
+    final updated = Expense(
+      id: expense.id,
+      tripId: expense.tripId,
+      title: expense.title,
+      amount: expense.amount,
+      category: expense.category,
+      date: expense.date,
+      paidBy: expense.paidBy,
+      sharedWith: List<String>.from(expense.sharedWith),
+      currency: expense.currency,
+      receiptPath: expense.receiptPath,
+      tags: result,
+    );
+
+    try {
+      final saved = await widget.api.updateExpense(updated);
+      if (!mounted) return;
+      setState(() {
+        final idx = _all.indexWhere((row) => row.id == saved.id);
+        if (idx >= 0) {
+          _all[idx] = saved;
+        }
+        _future = Future.value(_all);
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Expense updated')),
+      );
+    } catch (err) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Failed to update expense: $err')),
+      );
+    }
+  }
+
   List<Expense> _applyFilters(List<Expense> list) {
     Iterable<Expense> it = list;
 
     if (_fCategory != null) {
-      it = it.where((e) => e.category.toLowerCase() == _fCategory!.toLowerCase());
+      it = it
+          .where((e) => e.category.toLowerCase() == _fCategory!.toLowerCase());
     }
     if (_fCurrency != null) {
-      it = it.where((e) => (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase()) == _fCurrency!.toUpperCase());
+      it = it.where((e) =>
+          (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase()) ==
+          _fCurrency!.toUpperCase());
     }
     if (_fRange != null) {
-      final start = DateTime(_fRange!.start.year, _fRange!.start.month, _fRange!.start.day);
-      final end = DateTime(_fRange!.end.year, _fRange!.end.month, _fRange!.end.day, 23, 59, 59);
-      it = it.where((e) => e.date.isAfter(start.subtract(const Duration(milliseconds: 1))) &&
-                           e.date.isBefore(end.add(const Duration(milliseconds: 1))));
+      final start = DateTime(
+          _fRange!.start.year, _fRange!.start.month, _fRange!.start.day);
+      final end = DateTime(
+          _fRange!.end.year, _fRange!.end.month, _fRange!.end.day, 23, 59, 59);
+      it = it.where((e) =>
+          e.date.isAfter(start.subtract(const Duration(milliseconds: 1))) &&
+          e.date.isBefore(end.add(const Duration(milliseconds: 1))));
     }
     final res = it.toList()..sort((a, b) => b.date.compareTo(a.date));
     return res;
@@ -95,8 +181,9 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Set<String> _categoriesOf(List<Expense> list) =>
       list.map((e) => e.category).where((s) => s.trim().isNotEmpty).toSet();
 
-  Set<String> _currenciesOf(List<Expense> list) =>
-      list.map((e) => (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase())).toSet();
+  Set<String> _currenciesOf(List<Expense> list) => list
+      .map((e) => (e.currency.isEmpty ? _tripCcy : e.currency.toUpperCase()))
+      .toSet();
 
   // --- Currency bucket + conversion helpers (filtered totals) ---
 
@@ -110,11 +197,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   }
 
   /// Returns raw bucket sums, ≈ bucket sums in base, and grand total in base.
-  Future<({
-    Map<String, double> raw,
-    Map<String, double> approx,
-    double totalBase,
-  })> _computeFilteredTotals(List<Expense> rows) async {
+  Future<
+      ({
+        Map<String, double> raw,
+        Map<String, double> approx,
+        double totalBase,
+      })> _computeFilteredTotals(List<Expense> rows) async {
     final base = (_trip?.currency ?? 'EUR').toUpperCase();
     final raw = _bucketByCcy(rows, base);
 
@@ -139,7 +227,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           conv = await widget.api.convert(amount: amt, from: c, to: base);
         } catch (_) {
           conv = (rates != null)
-              ? FxService.convert(amount: amt, from: c, to: base, ratesForBaseTo: rates)
+              ? FxService.convert(
+                  amount: amt, from: c, to: base, ratesForBaseTo: rates)
               : amt;
         }
       }
@@ -154,7 +243,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   Future<double> _convertToTrip(String from, double amount) async {
     if (from.toUpperCase() == _tripCcy) return amount;
     try {
-      return await widget.api.convert(amount: amount, from: from.toUpperCase(), to: _tripCcy);
+      return await widget.api
+          .convert(amount: amount, from: from.toUpperCase(), to: _tripCcy);
     } catch (_) {
       return amount; // fallback
     }
@@ -162,7 +252,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
   Future<void> _exportCsv(List<Expense> list) async {
     if (_trip == null || list.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Nothing to export')));
+      ScaffoldMessenger.of(context)
+          .showSnackBar(const SnackBar(content: Text('Nothing to export')));
       return;
     }
 
@@ -182,8 +273,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Export')),
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Export')),
         ],
       ),
     );
@@ -224,7 +319,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
 
     final dir = await getTemporaryDirectory();
     final safeName = _trip!.name.replaceAll(RegExp(r'[^A-Za-z0-9_\-]+'), '_');
-    final file = File('${dir.path}/trip_${safeName}_${DateTime.now().millisecondsSinceEpoch}.csv');
+    final file = File(
+        '${dir.path}/trip_${safeName}_${DateTime.now().millisecondsSinceEpoch}.csv');
     await file.writeAsString(sb.toString());
 
     await Share.shareXFiles(
@@ -256,7 +352,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             return const Center(child: CircularProgressIndicator());
           }
           if (snap.hasError) {
-            return Center(child: Text('Failed to load expenses:\n${snap.error}'));
+            return Center(
+                child: Text('Failed to load expenses:\n${snap.error}'));
           }
 
           final loaded = snap.data ?? <Expense>[];
@@ -293,7 +390,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                       ChoiceChip(
                         label: Text(v),
                         selected: selected == v,
-                        onSelected: (_) => setState(() => onSelect(selected == v ? null : v)),
+                        onSelected: (_) =>
+                            setState(() => onSelect(selected == v ? null : v)),
                       ),
                   ],
                 ),
@@ -347,7 +445,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                                 lastDate: DateTime(now.year + 5),
                                 initialDateRange: _fRange,
                               );
-                              if (picked != null) setState(() => _fRange = picked);
+                              if (picked != null)
+                                setState(() => _fRange = picked);
                             },
                           ),
                           const Spacer(),
@@ -374,11 +473,12 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                 Card(
                   child: Padding(
                     padding: const EdgeInsets.all(12),
-                    child: FutureBuilder<({
-                      Map<String, double> raw,
-                      Map<String, double> approx,
-                      double totalBase,
-                    })>(
+                    child: FutureBuilder<
+                        ({
+                          Map<String, double> raw,
+                          Map<String, double> approx,
+                          double totalBase,
+                        })>(
                       future: _computeFilteredTotals(filtered),
                       builder: (ctx, snap) {
                         if (!snap.hasData) {
@@ -389,7 +489,8 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                         final codes = data.raw.keys.toList()..sort();
 
                         final rows = <Widget>[
-                          Text('Filtered totals', style: Theme.of(context).textTheme.titleSmall),
+                          Text('Filtered totals',
+                              style: Theme.of(context).textTheme.titleSmall),
                           const SizedBox(height: 8),
                         ];
 
@@ -399,12 +500,14 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
                             rows.add(Text('${raw.toStringAsFixed(2)} $c'));
                           } else {
                             final approx = data.approx[c] ?? raw;
-                            rows.add(Text('${raw.toStringAsFixed(2)} $c (≈ ${approx.toStringAsFixed(2)} $base)'));
+                            rows.add(Text(
+                                '${raw.toStringAsFixed(2)} $c (≈ ${approx.toStringAsFixed(2)} $base)'));
                           }
                         }
 
                         rows.add(const SizedBox(height: 6));
-                        rows.add(Text('≈ ${data.totalBase.toStringAsFixed(2)} $base',
+                        rows.add(Text(
+                            '≈ ${data.totalBase.toStringAsFixed(2)} $base',
                             style: Theme.of(context).textTheme.bodySmall));
 
                         return Column(
@@ -423,15 +526,35 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
             child: ListView.separated(
               padding: const EdgeInsets.all(16),
               itemCount: 1 + filtered.length,
-              separatorBuilder: (_, i) => (i == 0) ? const SizedBox(height: 12) : const Divider(height: 1),
+              separatorBuilder: (_, i) => (i == 0)
+                  ? const SizedBox(height: 12)
+                  : const Divider(height: 1),
               itemBuilder: (_, i) {
                 if (i == 0) return filtersAndTotals; // top block
                 final e = filtered[i - 1];
                 return ListTile(
                   title: Text(e.title),
-                  subtitle: Text('${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}'),
-                  trailing: Text('${e.amount.toStringAsFixed(2)} ${e.currency.isEmpty ? _tripCcy : e.currency}'),
-                  onTap: () {}, // (optional) open detail/edit
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                          '${e.category} • ${e.paidBy} • ${e.date.toLocal().toString().split(' ').first}'),
+                      if (e.tags.isNotEmpty) ...[
+                        const SizedBox(height: 4),
+                        Wrap(
+                          spacing: 6,
+                          children: e.tags
+                              .map((tag) => Chip(label: Text('#$tag')))
+                              .toList(),
+                        ),
+                      ],
+                    ],
+                  ),
+                  trailing: Text(
+                      '${e.amount.toStringAsFixed(2)} ${e.currency.isEmpty ? _tripCcy : e.currency}'),
+                  isThreeLine: e.tags.isNotEmpty,
+                  onTap: () => _editExpense(e),
                 );
               },
             ),
@@ -441,4 +564,3 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
     );
   }
 }
-

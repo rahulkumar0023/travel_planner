@@ -36,7 +36,6 @@ import '../services/local_budget_store.dart';
 // 👇 NEW import end
 // imports patch end
 
-
 class DashboardScreen extends StatefulWidget {
   final VoidCallback onSwitchTrip;
   final ApiService api;
@@ -51,7 +50,56 @@ class DashboardScreen extends StatefulWidget {
   State<DashboardScreen> createState() => _DashboardScreenState();
 }
 
-class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingObserver {
+class _TripNotesDialog extends StatefulWidget {
+  const _TripNotesDialog({required this.initialValue});
+
+  final String initialValue;
+
+  @override
+  State<_TripNotesDialog> createState() => _TripNotesDialogState();
+}
+
+class _TripNotesDialogState extends State<_TripNotesDialog> {
+  late final TextEditingController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = TextEditingController(text: widget.initialValue);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      title: const Text('Edit Trip Notes'),
+      content: TextField(
+        controller: _ctrl,
+        maxLines: 5,
+        decoration:
+            const InputDecoration(hintText: 'Notes for everyone in the trip'),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: () => Navigator.pop(context, _ctrl.text),
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+}
+
+class _DashboardScreenState extends State<DashboardScreen>
+    with WidgetsBindingObserver {
   Timer? _t; // session chip timer
   String _label = '';
   double _spentInTripCcy = 0.0;
@@ -65,7 +113,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   double? _tripBudgetOverride; // filled if we detect a matching Trip budget
 
   // Insights state
-  Map<String, double> _byCcy = <String, double>{};          // e.g. {'EUR': 50, 'INR': 10_000}
+  Map<String, double> _byCcy =
+      <String, double>{}; // e.g. {'EUR': 50, 'INR': 10_000}
   // Show per-currency amounts already converted to the trip currency (≈)
   Map<String, double> _byCcyApproxBase = <String, double>{};
   Map<String, double> _byCategoryBase = <String, double>{}; // in trip currency
@@ -76,9 +125,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   bool _isArchivedTrip = false;
 
   // --- linked monthly info for the active trip budget ---
-  Budget? _tripBudgetObj;          // the trip's Budget row (kind=trip)
-  Budget? _linkedMonthlyObj;       // the linked monthly budget, if any
-  double? _budgetApproxInLinked;   // ≈ trip budget amount in the monthly currency
+  Budget? _tripBudgetObj; // the trip's Budget row (kind=trip)
+  Budget? _linkedMonthlyObj; // the linked monthly budget, if any
+  double? _budgetApproxInLinked; // ≈ trip budget amount in the monthly currency
 
 // initState patch start
   @override
@@ -142,7 +191,7 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       }
     }
     await _ensureActiveTrip();
-    await _loadLocal();            // will recalc + then update home (see patch below)
+    await _loadLocal(); // will recalc + then update home (see patch below)
     await _loadTripBudgetOverride();
   }
 
@@ -160,7 +209,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
   }
 
-
   double get _totalSpent =>
       _expenses.fold<double>(0, (sum, e) => sum + e.amount);
 
@@ -168,22 +216,37 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   Future<void> _ensureActiveTrip() async {
     _activeTrip = TripStorageService.loadLightweight();
     if (_activeTrip == null) {
-      if (mounted) setState(() => _isArchivedTrip = false); // triggers empty-state
+      if (mounted)
+        setState(() => _isArchivedTrip = false); // triggers empty-state
       return;
     }
     // Optional: verify it still exists in cache so deleted trips don't show
     try {
       final cached = await LocalTripStore.load();
-      final exists = cached.any((t) => t.id == _activeTrip!.id);
-      if (!exists) {
-        await TripStorageService.clear();
-        _activeTrip = null;
-        if (mounted) setState(() => _isArchivedTrip = false);
-        return;
+      for (final t in cached) {
+        if (t.id == _activeTrip!.id) {
+          _activeTrip = t;
+          break;
+        }
       }
     } catch (_) {}
     _isArchivedTrip = await ArchivedTripsStore.isArchived(_activeTrip!.id);
     if (mounted) setState(() {});
+  }
+
+  Future<void> _cacheTrip(Trip updated) async {
+    try {
+      final cached = await LocalTripStore.load();
+      final idx = cached.indexWhere((t) => t.id == updated.id);
+      if (idx >= 0) {
+        cached[idx] = updated;
+      } else {
+        cached.add(updated);
+      }
+      await LocalTripStore.save(cached);
+    } catch (_) {
+      // ignore cache write failures
+    }
   }
 // _ensureActiveTrip method end
 
@@ -204,14 +267,15 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     final out = <String, double>{};
     for (final e in buckets.entries) {
       final from = e.key.toUpperCase();
-      final amt  = e.value;
+      final amt = e.value;
       if (amt == 0) continue;
 
       if (from == toCcy.toUpperCase()) {
         out[from] = amt;
       } else {
         try {
-          out[from] = await widget.api.convert(amount: amt, from: from, to: toCcy);
+          out[from] =
+              await widget.api.convert(amount: amt, from: from, to: toCcy);
         } catch (_) {
           out[from] = amt; // safe fallback
         }
@@ -219,8 +283,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
     return out;
   }
-
-
 
 // _openTripPicker method (final) start
   Future<void> _openTripPicker() async {
@@ -254,14 +316,18 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     }
 
     // 2) Build conversion factors per currency (to trip currency) and total
-    final factors = <String, double>{};          // e.g. {'PLN': 0.235, 'EUR': 1}
-    final approxBaseByCcy = <String, double>{};  // converted bucket amounts
+    final factors = <String, double>{}; // e.g. {'PLN': 0.235, 'EUR': 1}
+    final approxBaseByCcy = <String, double>{}; // converted bucket amounts
     double totalBase = 0.0;
 
     for (final entry in rawByCcy.entries) {
       final c = entry.key;
       final raw = entry.value;
-      if (raw <= 0) { factors[c] = 1; approxBaseByCcy[c] = 0; continue; }
+      if (raw <= 0) {
+        factors[c] = 1;
+        approxBaseByCcy[c] = 0;
+        continue;
+      }
 
       if (c == base) {
         factors[c] = 1.0;
@@ -279,7 +345,10 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         try {
           final rates = await FxService.loadRates(base);
           converted = FxService.convert(
-            amount: raw, from: c, to: base, ratesForBaseTo: rates,
+            amount: raw,
+            from: c,
+            to: base,
+            ratesForBaseTo: rates,
           );
         } catch (_) {/* leave null */}
       }
@@ -305,7 +374,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     // dailyBurn = spentInTripCurrency / daysSoFar
     // remaining = max(0, budget - spentInTripCurrency)
     // days left = ceil(remaining / dailyBurn) (burn == 0 -> 0)
-    final daysSoFar = (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
+    final daysSoFar =
+        (DateTime.now().difference(t.startDate).inDays + 1).clamp(1, 36500);
     final burn = totalBase / daysSoFar;
     int? daysLeft;
     final budget = (_tripBudgetOverride ?? t.initialBudget);
@@ -316,20 +386,17 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
     if (!mounted) return;
     setState(() {
-      _byCcy = rawByCcy;                 // raw buckets (for display)
+      _byCcy = rawByCcy; // raw buckets (for display)
       _byCcyApproxBase = approxBaseByCcy; // ≈ in trip currency
-      _byCategoryBase = byCatBase;       // for the bar chart
-      _spentInBase = totalBase;          // INSIGHTS total (now correct)
-      _spentInTripCcy = totalBase;       // keep card’s “Spent” in sync
+      _byCategoryBase = byCatBase; // for the bar chart
+      _spentInBase = totalBase; // INSIGHTS total (now correct)
+      _spentInTripCcy = totalBase; // keep card’s “Spent” in sync
       _dailyBurn = burn;
       _daysLeft = daysLeft;
     });
 
     await _updateApproxHome();
   }
-
-
-
 
 // _loadLocal method start (unchanged header)
   Future<void> _loadLocal() async {
@@ -344,11 +411,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         ..sort((a, b) => b.date.compareTo(a.date));
     });
 
-
     await _recomputeInsights();
   }
 // _loadLocal method end
-
 
   Future<void> _updateApproxHome() async {
     final t = _activeTrip;
@@ -424,7 +489,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       Budget? linked;
       if (tripB?.linkedMonthlyBudgetId != null) {
         for (final b in all) {
-          if (b.kind == BudgetKind.monthly && b.id == tripB!.linkedMonthlyBudgetId) {
+          if (b.kind == BudgetKind.monthly &&
+              b.id == tripB!.linkedMonthlyBudgetId) {
             linked = b;
             break;
           }
@@ -447,9 +513,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
 
       if (!mounted) return;
       setState(() {
-        _tripBudgetOverride   = tripB?.amount; // keep your override logic
-        _tripBudgetObj        = tripB;
-        _linkedMonthlyObj     = linked;
+        _tripBudgetOverride = tripB?.amount; // keep your override logic
+        _tripBudgetObj = tripB;
+        _linkedMonthlyObj = linked;
         _budgetApproxInLinked = approx;
       });
     } catch (_) {
@@ -462,8 +528,24 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (m == null) return 'Not linked';
     final mm = m.month ?? 0;
     final yy = m.year ?? 0;
-    const names = ['', 'Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    final when = (mm >= 1 && mm <= 12 && yy > 0) ? '${names[mm]} $yy' : (m.name ?? 'Monthly');
+    const names = [
+      '',
+      'Jan',
+      'Feb',
+      'Mar',
+      'Apr',
+      'May',
+      'Jun',
+      'Jul',
+      'Aug',
+      'Sep',
+      'Oct',
+      'Nov',
+      'Dec'
+    ];
+    final when = (mm >= 1 && mm <= 12 && yy > 0)
+        ? '${names[mm]} $yy'
+        : (m.name ?? 'Monthly');
     return 'Linked to $when Budget (${m.currency})';
   }
 
@@ -511,9 +593,13 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (t == null) return;
     final tripName = t.name;
     final link = '$baseUrl/trips/${t.id}/join?token=XYZ';
+    final box = context.findRenderObject() as RenderBox?;
+    final origin =
+        box != null ? box.localToGlobal(Offset.zero) & box.size : null;
     await Share.share(
       '✈️ Join my trip "$tripName"\n\n$link',
       subject: 'Trip Invite: $tripName',
+      sharePositionOrigin: origin,
     );
   }
 
@@ -536,7 +622,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         String? addPick;
         return Padding(
           padding: EdgeInsets.only(
-            left: 16, right: 16,
+            left: 16,
+            right: 16,
             top: 16,
             bottom: 16 + MediaQuery.of(ctx).viewInsets.bottom,
           ),
@@ -545,27 +632,37 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Spend currencies', style: Theme.of(ctx).textTheme.titleMedium),
+                Text('Spend currencies',
+                    style: Theme.of(ctx).textTheme.titleMedium),
                 const SizedBox(height: 8),
-                Text('Base currency', style: Theme.of(ctx).textTheme.labelMedium),
+                Text('Base currency',
+                    style: Theme.of(ctx).textTheme.labelMedium),
                 const SizedBox(height: 6),
                 Wrap(
-                  spacing: 8, runSpacing: 8,
+                  spacing: 8,
+                  runSpacing: 8,
                   children: [
-                    Chip(label: Text(base), avatar: const Icon(Icons.star, size: 16)),
+                    Chip(
+                        label: Text(base),
+                        avatar: const Icon(Icons.star, size: 16)),
                   ],
                 ),
                 const SizedBox(height: 12),
-                Text('Extra currencies', style: Theme.of(ctx).textTheme.labelMedium),
+                Text('Extra currencies',
+                    style: Theme.of(ctx).textTheme.labelMedium),
                 const SizedBox(height: 6),
                 Wrap(
-                  spacing: 8, runSpacing: 8,
+                  spacing: 8,
+                  runSpacing: 8,
                   children: selected.isEmpty
                       ? [Text('None', style: Theme.of(ctx).textTheme.bodySmall)]
-                      : selected.map((c) => InputChip(
-                          label: Text(c),
-                          onDeleted: () => setBtm(() => selected.remove(c)),
-                        )).toList(),
+                      : selected
+                          .map((c) => InputChip(
+                                label: Text(c),
+                                onDeleted: () =>
+                                    setBtm(() => selected.remove(c)),
+                              ))
+                          .toList(),
                 ),
                 const SizedBox(height: 12),
                 Row(
@@ -577,7 +674,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                         isExpanded: true,
                         items: all
                             .where((c) => c != base && !selected.contains(c))
-                            .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                            .map((c) =>
+                                DropdownMenuItem(value: c, child: Text(c)))
                             .toList(),
                         onChanged: (v) => setBtm(() => addPick = v),
                       ),
@@ -598,7 +696,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 const SizedBox(height: 16),
                 Row(
                   children: [
-                    TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+                    TextButton(
+                        onPressed: () => Navigator.pop(ctx),
+                        child: const Text('Cancel')),
                     const Spacer(),
                     FilledButton.icon(
                       icon: const Icon(Icons.save),
@@ -613,14 +713,20 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                           currency: trip.currency,
                           participants: trip.participants,
                           spendCurrencies: selected.toList(),
+                          notes: trip.notes,
                         );
                         await TripStorageService.save(updated);
-                        try { await widget.api.updateTrip(updated); } catch (_) {}
+                        var serverTrip = updated;
+                        try {
+                          serverTrip = await widget.api.updateTrip(updated);
+                        } catch (_) {}
+                        await _cacheTrip(serverTrip);
                         if (!mounted) return;
-                        setState(() => _activeTrip = updated);
+                        setState(() => _activeTrip = serverTrip);
                         Navigator.pop(ctx);
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Spend currencies updated')),
+                          const SnackBar(
+                              content: Text('Spend currencies updated')),
                         );
                       },
                     ),
@@ -650,7 +756,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
     if (t == null) return;
 
     // Fetch participants from your participants service (NOT http)
-    final List<String> participants = t.participants; // fallback to trip participants
+    final List<String> participants =
+        t.participants; // fallback to trip participants
 
     // 👇 NEW: collect currencies for this trip
     final budgets = await widget.api.fetchBudgetsOrCache();
@@ -689,8 +796,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               date: DateTime.now(),
               paidBy: paidBy,
               sharedWith: sharedWith,
-              currency : currency, // <-- new param
-              receiptPath: receiptPath,                 // NEW
+              currency: currency, // <-- new param
+              receiptPath: receiptPath, // NEW
             );
             await _box.add(e); // local first (Hive)
             setState(() => _expenses.insert(0, e));
@@ -707,7 +814,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
               ));
               if (mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Saved offline — will sync automatically')),
+                  const SnackBar(
+                      content: Text('Saved offline — will sync automatically')),
                 );
               }
             }
@@ -716,8 +824,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
       ),
     );
   }
-
-
 
   // 👇 NEW: dispose listener start
   @override
@@ -749,7 +855,6 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
   }
 // 👇 NEW: dispose listener end
 
-
   @override
   Widget build(BuildContext context) {
     final t = _activeTrip;
@@ -763,7 +868,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
           actions: [
             if (_label.isNotEmpty)
               Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
                 child: Chip(label: Text(_label)),
               ),
             // 👇 NEW: Sign out (no-trip state)
@@ -773,7 +879,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 if (v == 'signout') {
                   await widget.api.signOut();
                   if (!mounted) return;
-                  Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
+                  Navigator.of(context)
+                      .pushNamedAndRemoveUntil('/sign-in', (route) => false);
                 }
               },
               itemBuilder: (_) => const [
@@ -829,7 +936,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 children: [
                   if (_label.isNotEmpty)
                     Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 10),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8.0, vertical: 10),
                       child: Chip(label: Text(_label)),
                     ),
                   // OUTBOX BADGE
@@ -843,7 +951,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                           IconButton(
                             tooltip: cnt == 0 ? 'All synced' : 'Pending sync',
                             onPressed: _flushOutbox,
-                            icon: Icon(cnt == 0 ? Icons.cloud_done_outlined : Icons.cloud_off_outlined),
+                            icon: Icon(cnt == 0
+                                ? Icons.cloud_done_outlined
+                                : Icons.cloud_off_outlined),
                           ),
                           if (cnt > 0)
                             Positioned(
@@ -897,22 +1007,34 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     onSelected: (v) async {
                       if (v == 'currencies') _manageSpendCurrencies();
                       if (v == 'balances') {
-                        Navigator.push(context, MaterialPageRoute(
-                          builder: (_) => GroupBalanceScreen(tripId: _activeTrip!.id, currency: _activeTrip!.currency, api: widget.api, participants: _activeTrip!.participants, spendCurrencies: _activeTrip!.spendCurrencies),
-                        ));
+                        Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (_) => GroupBalanceScreen(
+                                  tripId: _activeTrip!.id,
+                                  currency: _activeTrip!.currency,
+                                  api: widget.api,
+                                  participants: _activeTrip!.participants,
+                                  spendCurrencies:
+                                      _activeTrip!.spendCurrencies),
+                            ));
                       }
                       if (v == 'signout') {
                         // 👇 NEW: Sign out (main state)
                         // dashboard signout action start
                         await widget.api.signOut();
                         if (!mounted) return;
-                        Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
+                        Navigator.of(context).pushNamedAndRemoveUntil(
+                            '/sign-in', (route) => false);
                         // dashboard signout action end
                       }
                     },
                     itemBuilder: (_) => const [
-                      PopupMenuItem(value: 'currencies', child: Text('Spend currencies…')),
-                      PopupMenuItem(value: 'balances', child: Text('View balances')),
+                      PopupMenuItem(
+                          value: 'currencies',
+                          child: Text('Spend currencies…')),
+                      PopupMenuItem(
+                          value: 'balances', child: Text('View balances')),
                       PopupMenuItem(value: 'signout', child: Text('Sign out')),
                     ],
                   ),
@@ -923,7 +1045,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         ],
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: _isArchivedTrip ? null : _addExpenseForm, // or _addExpenseQuick for quick test
+        onPressed: _isArchivedTrip
+            ? null
+            : _addExpenseForm, // or _addExpenseQuick for quick test
         child: const Icon(Icons.add),
       ),
       body: ListView(
@@ -965,10 +1089,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                     final hasBudget = budget > 0;
                     final spent = _spentInTripCcy;
                     final remainingRaw = budget - spent;
-                    final remaining = remainingRaw < 0 ? 0 : remainingRaw; // clamp to 0
+                    final remaining =
+                        remainingRaw < 0 ? 0 : remainingRaw; // clamp to 0
                     final overBy = remainingRaw < 0 ? -remainingRaw : 0;
-
-
 
 // budget card -> Builder(...) start
                     return Column(
@@ -1017,14 +1140,17 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                         const SizedBox(height: 4),
 
                         // Spent/Remaining in TRIP currency
-                        Text('Spent: ${_spentInTripCcy.toStringAsFixed(2)} ${t.currency}'),
+                        Text(
+                            'Spent: ${_spentInTripCcy.toStringAsFixed(2)} ${t.currency}'),
                         if (hasBudget) ...[
                           // clamp remaining to 0, show "Over by" when exceeded
-                          Text('Remaining: ${remaining.toStringAsFixed(2)} ${t.currency}'),
+                          Text(
+                              'Remaining: ${remaining.toStringAsFixed(2)} ${t.currency}'),
                           if (overBy > 0)
                             Text(
                               'Over by: ${overBy.toStringAsFixed(2)} ${t.currency}',
-                              style: TextStyle(color: Theme.of(context).colorScheme.error),
+                              style: TextStyle(
+                                  color: Theme.of(context).colorScheme.error),
                             ),
                         ] else ...[
                           const SizedBox(height: 8),
@@ -1033,7 +1159,9 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                             label: const Text('Set trip budget'),
                             onPressed: () async {
                               await Navigator.of(context).push(
-                                MaterialPageRoute(builder: (_) => BudgetsScreen(api: widget.api)),
+                                MaterialPageRoute(
+                                    builder: (_) =>
+                                        BudgetsScreen(api: widget.api)),
                               );
                               if (!mounted) return;
                               await _loadTripBudgetOverride(); // refresh after returning
@@ -1045,9 +1173,11 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                         // approx home line start
                         if (_approxHomeValue != null &&
                             _homeCurrencyCode != null &&
-                            _homeCurrencyCode!.toUpperCase() != t.currency.toUpperCase()) ...[
+                            _homeCurrencyCode!.toUpperCase() !=
+                                t.currency.toUpperCase()) ...[
                           const SizedBox(height: 8),
-                          Text('≈ ${_approxHomeValue!.toStringAsFixed(2)} $_homeCurrencyCode'),
+                          Text(
+                              '≈ ${_approxHomeValue!.toStringAsFixed(2)} $_homeCurrencyCode'),
                         ],
                         // approx home line end
 
@@ -1067,7 +1197,8 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                             ),
                           ],
                         ),
-                        if (_linkedMonthlyObj != null && _budgetApproxInLinked != null)
+                        if (_linkedMonthlyObj != null &&
+                            _budgetApproxInLinked != null)
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(
@@ -1079,38 +1210,49 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                         // -----------------------
                         // 👇 NEW: Per-currency breakdown (backend conversion, null-safe)
                         const SizedBox(height: 8),
-                        Text('Spent currencies:', style: Theme.of(context).textTheme.labelMedium),
+                        Text('Spent currencies:',
+                            style: Theme.of(context).textTheme.labelMedium),
                         const SizedBox(height: 4),
 
                         Builder(builder: (_) {
-                          final buckets = _bucketsByCurrency();     // build once to avoid rebuild drift
+                          final buckets =
+                              _bucketsByCurrency(); // build once to avoid rebuild drift
                           final codes = buckets.keys.toList()..sort();
                           if (codes.isEmpty) return const SizedBox.shrink();
 
                           return FutureBuilder<Map<String, double>>(
                             future: _approxBucketsToTrip(buckets, t.currency),
                             builder: (_, snap) {
-                              final approx = snap.data; // may be null while waiting
+                              final approx =
+                                  snap.data; // may be null while waiting
                               final rows = <Widget>[];
 
                               for (final c in codes) {
                                 final raw = buckets[c] ?? 0.0;
-                                if (c.toUpperCase() == t.currency.toUpperCase()) {
-                                  rows.add(Text('${raw.toStringAsFixed(2)} $c'));
-                                } else if (approx == null || !approx.containsKey(c)) {
+                                if (c.toUpperCase() ==
+                                    t.currency.toUpperCase()) {
+                                  rows.add(
+                                      Text('${raw.toStringAsFixed(2)} $c'));
+                                } else if (approx == null ||
+                                    !approx.containsKey(c)) {
                                   rows.add(Text.rich(TextSpan(children: [
-                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
+                                    TextSpan(
+                                        text: '${raw.toStringAsFixed(2)} $c'),
                                     TextSpan(
                                       text: ' (≈ … ${t.currency})',
-                                      style: Theme.of(context).textTheme.bodySmall,
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
                                     ),
                                   ])));
                                 } else {
                                   rows.add(Text.rich(TextSpan(children: [
-                                    TextSpan(text: '${raw.toStringAsFixed(2)} $c'),
                                     TextSpan(
-                                      text: ' (≈ ${approx[c]!.toStringAsFixed(2)} ${t.currency})',
-                                      style: Theme.of(context).textTheme.bodySmall,
+                                        text: '${raw.toStringAsFixed(2)} $c'),
+                                    TextSpan(
+                                      text:
+                                          ' (≈ ${approx[c]!.toStringAsFixed(2)} ${t.currency})',
+                                      style:
+                                          Theme.of(context).textTheme.bodySmall,
                                     ),
                                   ])));
                                 }
@@ -1129,18 +1271,55 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                             },
                           );
                         }),
-
                       ],
                     );
 // budget card -> Builder(...) end
-
                   }),
-
                 ],
               ),
             ),
           ),
           const SizedBox(height: 12),
+          // 👇 NEW: Trip Notes card start
+          Card(
+            child: ListTile(
+              title: const Text('Trip Notes'),
+              subtitle: Text(
+                (t.notes != null && t.notes!.trim().isNotEmpty)
+                    ? t.notes!
+                    : 'No notes yet. Tap to add.',
+                style: const TextStyle(fontStyle: FontStyle.italic),
+              ),
+              onTap: () async {
+                final latest = _activeTrip;
+                if (latest == null) return;
+                final newNotes = await showDialog<String>(
+                  context: context,
+                  builder: (dialogCtx) => _TripNotesDialog(
+                    initialValue: latest.notes ?? '',
+                  ),
+                );
+                if (newNotes == null) return;
+                final trimmed = newNotes.trim();
+                final updated = latest.copyWith(
+                  notes: trimmed.isEmpty ? null : trimmed,
+                );
+                try {
+                  final saved = await widget.api.updateTrip(updated);
+                  if (!mounted) return;
+                  setState(() => _activeTrip = saved);
+                  await _cacheTrip(saved);
+                } catch (_) {
+                  if (!mounted) return;
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Failed to update notes')),
+                  );
+                }
+              },
+            ),
+          ),
+          const SizedBox(height: 12),
+          // 👆 NEW: Trip Notes card end
           Card(
             child: Padding(
               padding: const EdgeInsets.all(16),
@@ -1148,23 +1327,28 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   // --- Insights (fixed math) ---
-                  Text('Insights', style: Theme.of(context).textTheme.titleMedium),
+                  Text('Insights',
+                      style: Theme.of(context).textTheme.titleMedium),
                   const SizedBox(height: 6),
                   Row(
                     children: [
-                      Text('Daily burn: ${_dailyBurn.toStringAsFixed(2)} ${t.currency}/day'),
+                      Text(
+                          'Daily burn: ${_dailyBurn.toStringAsFixed(2)} ${t.currency}/day'),
                       const SizedBox(width: 16),
                       Text('Days left: ${_daysLeft ?? 0}'),
                     ],
                   ),
                   const SizedBox(height: 6),
-                  Text('By category', style: Theme.of(context).textTheme.bodyMedium),
+                  Text('By category',
+                      style: Theme.of(context).textTheme.bodyMedium),
                   Builder(builder: (_) {
                     if (_byCategoryBase.isEmpty) return const SizedBox.shrink();
-                    final max = _byCategoryBase.values.fold<double>(0, (p, v) => v > p ? v : p);
+                    final max = _byCategoryBase.values
+                        .fold<double>(0, (p, v) => v > p ? v : p);
                     return Column(
                       children: _byCategoryBase.entries.map((e) {
-                        final pct = max <= 0 ? 0.0 : (e.value / max).clamp(0.0, 1.0);
+                        final pct =
+                            max <= 0 ? 0.0 : (e.value / max).clamp(0.0, 1.0);
                         return Padding(
                           padding: const EdgeInsets.symmetric(vertical: 4),
                           child: Row(
@@ -1188,18 +1372,21 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
                   }),
                   const SizedBox(height: 6),
                   if (_byCcy.isNotEmpty) ...[
-                    Text('Spent currencies:', style: Theme.of(context).textTheme.bodyMedium),
+                    Text('Spent currencies:',
+                        style: Theme.of(context).textTheme.bodyMedium),
                     ...((_byCcy.keys.toList()..sort()).map((ccy) {
                       final raw = _byCcy[ccy] ?? 0;
                       final approx = _byCcyApproxBase[ccy] ?? raw;
-                      final same = ccy.toUpperCase() == t.currency.toUpperCase();
+                      final same =
+                          ccy.toUpperCase() == t.currency.toUpperCase();
                       return Text(
                         same
                             ? '${raw.toStringAsFixed(2)} $ccy'
                             : '${raw.toStringAsFixed(2)} $ccy  (≈ ${approx.toStringAsFixed(2)} ${t.currency})',
                       );
                     })),
-                    Text('Total spent: ${_spentInBase.toStringAsFixed(2)} ${t.currency}'),
+                    Text(
+                        'Total spent: ${_spentInBase.toStringAsFixed(2)} ${t.currency}'),
                   ],
                 ],
               ),
@@ -1243,5 +1430,5 @@ class _DashboardScreenState extends State<DashboardScreen> with WidgetsBindingOb
         ],
       ),
     );
-  } 
+  }
 }

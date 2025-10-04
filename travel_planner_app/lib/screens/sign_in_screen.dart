@@ -13,7 +13,7 @@ class SignInScreen extends StatefulWidget {
 class _SignInScreenState extends State<SignInScreen> {
   bool _busy = false;
   String? _error;
-  
+
   // 👇 NEW: state fields for status
   // signin screen fields start
   String? _currentEmail;
@@ -33,7 +33,8 @@ class _SignInScreenState extends State<SignInScreen> {
         try {
           final me = await widget.api.getMe();
           if (!mounted) return;
-          Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+          Navigator.of(context)
+              .pushNamedAndRemoveUntil('/home', (route) => false);
           return; // stop building sign-in UI
         } catch (_) {
           // token invalid → fall through to sign-in UI
@@ -46,7 +47,10 @@ class _SignInScreenState extends State<SignInScreen> {
   // signin screen initState end
 
   Future<void> _google() async {
-    setState(() { _busy = true; _error = null; });
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
       final idToken = await OAuthService.instance.getGoogleIdToken();
       await widget.api.loginWithIdToken(idToken: idToken, provider: 'google');
@@ -63,7 +67,10 @@ class _SignInScreenState extends State<SignInScreen> {
   }
 
   Future<void> _apple() async {
-    setState(() { _busy = true; _error = null; });
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
     try {
       final idToken = await OAuthService.instance.getAppleIdentityToken();
       await widget.api.loginWithIdToken(idToken: idToken, provider: 'apple');
@@ -97,18 +104,17 @@ class _SignInScreenState extends State<SignInScreen> {
             if (_error != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 12),
-                child: Text(_error!, style: TextStyle(color: Colors.red.shade400)),
+                child:
+                    Text(_error!, style: TextStyle(color: Colors.red.shade400)),
               ),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
                 onPressed: _busy ? null : _google,
                 icon: const Icon(Icons.login),
-                label: const Flexible(
-                  child: Text(
-                    'Continue with Google',
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                label: const Text(
+                  'Continue with Google',
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
@@ -118,11 +124,9 @@ class _SignInScreenState extends State<SignInScreen> {
               child: FilledButton.icon(
                 onPressed: _busy ? null : _apple,
                 icon: const Icon(Icons.apple),
-                label: const Flexible(
-                  child: Text(
-                    'Continue with Apple',
-                    overflow: TextOverflow.ellipsis,
-                  ),
+                label: const Text(
+                  'Continue with Apple',
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
@@ -142,7 +146,8 @@ class _SignInScreenState extends State<SignInScreen> {
                       await widget.api.signInDevAndFetch('rahul@example.com');
                       final me = await widget.api.getMe();
                       if (!context.mounted) return;
-                      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
+                      Navigator.of(context)
+                          .pushNamedAndRemoveUntil('/home', (route) => false);
                       // navigate to home after login end
                     } catch (e) {
                       if (!context.mounted) return;
@@ -181,7 +186,8 @@ class _SignInScreenState extends State<SignInScreen> {
                     // navigate to sign-in after logout start
                     await widget.api.signOut();
                     if (!context.mounted) return;
-                    Navigator.of(context).pushNamedAndRemoveUntil('/sign-in', (route) => false);
+                    Navigator.of(context)
+                        .pushNamedAndRemoveUntil('/sign-in', (route) => false);
                     // navigate to sign-in after logout end
                   },
                   child: const Text('Sign out'),
@@ -189,7 +195,7 @@ class _SignInScreenState extends State<SignInScreen> {
               ],
             ),
             // signin actions end
-            
+
             // 👇 NEW: status text (drop this anywhere in the UI to show session info)
             // signin status start
             Padding(
