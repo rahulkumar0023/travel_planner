@@ -3,7 +3,6 @@
 
 import 'package:flutter/material.dart';
 import '../../services/monthly_store.dart';
-import '../../models/monthly_category.dart';
 
 class TxnEditorSheet extends StatefulWidget {
   final String monthKey;
@@ -15,7 +14,7 @@ class TxnEditorSheet extends StatefulWidget {
 }
 
 class _TxnEditorSheetState extends State<TxnEditorSheet> {
-  MonthlyCategory? _selected;
+  _CategoryChoice? _selected;
   final _amountCtrl = TextEditingController();
   final _noteCtrl = TextEditingController();
   String _currency = 'EUR';
@@ -35,7 +34,8 @@ class _TxnEditorSheetState extends State<TxnEditorSheet> {
     setState(() => _saving = true);
     await MonthlyStore.instance.addTxn(
       monthKey: widget.monthKey,
-      categoryId: _selected!.id,
+      categoryId: _selected!.categoryId,
+      subCategoryId: _selected!.subCategoryId,
       amount: amount,
       currency: _currency,
       note: _noteCtrl.text.trim(),
@@ -49,6 +49,31 @@ class _TxnEditorSheetState extends State<TxnEditorSheet> {
   Widget build(BuildContext context) {
     final cats = MonthlyStore.instance
         .categoriesFor(widget.monthKey, type: widget.type, parentId: null);
+    final choices = <_CategoryChoice>[];
+    void addChoice(_CategoryChoice choice) {
+      if (!choices.contains(choice)) {
+        choices.add(choice);
+      }
+    }
+    for (final c in cats) {
+      addChoice(_CategoryChoice(
+        label: c.name,
+        categoryId: c.id,
+        subCategoryId: null,
+      ));
+      final subs = MonthlyStore.instance
+          .categoriesFor(widget.monthKey,
+              type: widget.type, parentId: c.id);
+      for (final s in subs) {
+        addChoice(_CategoryChoice(
+          label: '↳ ${s.name}',
+          categoryId: c.id,
+          subCategoryId: s.id,
+        ));
+      }
+    }
+    final dropdownValue =
+        choices.contains(_selected) ? _selected : null;
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
       child: SingleChildScrollView(
@@ -59,21 +84,14 @@ class _TxnEditorSheetState extends State<TxnEditorSheet> {
               Text('Add ${widget.type}',
                   style: Theme.of(context).textTheme.titleMedium),
               const SizedBox(height: 12),
-              DropdownButtonFormField<MonthlyCategory>(
-                value: _selected,
-                items: [
-                  for (final c in cats) ...[
-                    DropdownMenuItem(value: c, child: Text(c.name)),
-                    for (final s in MonthlyStore.instance
-                        .categoriesFor(widget.monthKey,
-                            type: widget.type, parentId: c.id))
-                      DropdownMenuItem(
-                          value: s,
-                          child: Padding(
-                              padding: const EdgeInsets.only(left: 12),
-                              child: Text('↳ ${s.name}'))),
-                  ]
-                ],
+              DropdownButtonFormField<_CategoryChoice>(
+                value: dropdownValue,
+                items: choices
+                    .map((choice) => DropdownMenuItem(
+                          value: choice,
+                          child: Text(choice.label),
+                        ))
+                    .toList(),
                 onChanged: (v) => setState(() => _selected = v),
                 decoration: const InputDecoration(
                     labelText: 'Category / Sub-category'),
@@ -142,5 +160,28 @@ class _TxnEditorSheetState extends State<TxnEditorSheet> {
       ),
     );
   }
+}
+
+class _CategoryChoice {
+  const _CategoryChoice({
+    required this.label,
+    required this.categoryId,
+    required this.subCategoryId,
+  });
+
+  final String label;
+  final String categoryId;
+  final String? subCategoryId;
+
+  @override
+  bool operator ==(Object other) {
+    if (identical(this, other)) return true;
+    return other is _CategoryChoice &&
+        other.categoryId == categoryId &&
+        other.subCategoryId == subCategoryId;
+  }
+
+  @override
+  int get hashCode => Object.hash(categoryId, subCategoryId);
 }
 // ===== txn_editor_sheet.dart — END =====

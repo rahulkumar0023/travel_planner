@@ -3,8 +3,13 @@ import '../services/api_service.dart';
 import '../services/oauth.dart';
 
 class SignInScreen extends StatefulWidget {
-  const SignInScreen({super.key, required this.api});
+  const SignInScreen({
+    super.key,
+    required this.api,
+    this.autoRedirectHome = true,
+  });
   final ApiService api;
+  final bool autoRedirectHome;
 
   @override
   State<SignInScreen> createState() => _SignInScreenState();
@@ -18,6 +23,7 @@ class _SignInScreenState extends State<SignInScreen> {
   // signin screen fields start
   String? _currentEmail;
   bool _restored = false;
+  bool _signedIn = false;
   // signin screen fields end
 
   // 👇 NEW: restore session on open
@@ -25,6 +31,7 @@ class _SignInScreenState extends State<SignInScreen> {
   @override
   void initState() {
     super.initState();
+    _signedIn = widget.api.isSignedIn;
     () async {
       // 👇 NEW: if session restored, skip sign-in and go to Home
       // auto-forward after restore start
@@ -33,6 +40,8 @@ class _SignInScreenState extends State<SignInScreen> {
         try {
           final me = await widget.api.getMe();
           if (!mounted) return;
+          _signedIn = true;
+          _currentEmail = me['email'] as String? ?? _currentEmail;
           Navigator.of(context)
               .pushNamedAndRemoveUntil('/home', (route) => false);
           return; // stop building sign-in UI
@@ -54,11 +63,18 @@ class _SignInScreenState extends State<SignInScreen> {
     try {
       final idToken = await OAuthService.instance.getGoogleIdToken();
       await widget.api.loginWithIdToken(idToken: idToken, provider: 'google');
+      try {
+        final me = await widget.api.getMe();
+        _currentEmail = me['email'] as String? ?? _currentEmail;
+      } catch (_) {}
+      _signedIn = true;
       if (!mounted) return;
-      // 👇 Update: after successful sign-in, go to Home
-      // navigate to home after login start
-      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
-      // navigate to home after login end
+      if (widget.autoRedirectHome) {
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil('/home', (route) => false);
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -80,12 +96,16 @@ class _SignInScreenState extends State<SignInScreen> {
         // ignore: avoid_print
         // ignore: use_build_context_synchronously
         debugPrint("[Auth] signed in as ${me['email']}");
+        _currentEmail = me['email'] as String? ?? _currentEmail;
       } catch (_) {}
+      _signedIn = true;
       if (!mounted) return;
-      // 👇 Update: after successful sign-in, go to Home
-      // navigate to home after login start
-      Navigator.of(context).pushNamedAndRemoveUntil('/home', (route) => false);
-      // navigate to home after login end
+      if (widget.autoRedirectHome) {
+        Navigator.of(context)
+            .pushNamedAndRemoveUntil('/home', (route) => false);
+      } else {
+        Navigator.of(context).pop(true);
+      }
     } catch (e) {
       setState(() => _error = '$e');
     } finally {
@@ -109,26 +129,39 @@ class _SignInScreenState extends State<SignInScreen> {
               ),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _busy ? null : _google,
-                icon: const Icon(Icons.login),
-                label: const Text(
-                  'Continue with Google',
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
+              child: _signedIn
+                  ? FilledButton.icon(
+                      onPressed: null,
+                      icon: const Icon(Icons.verified_user_outlined),
+                      label: Text(
+                        _currentEmail == null
+                            ? 'Already signed in'
+                            : 'Signed in as $_currentEmail',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    )
+                  : FilledButton.icon(
+                      onPressed: _busy ? null : _google,
+                      icon: const Icon(Icons.login),
+                      label: const Text(
+                        'Continue with Google',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
             ),
             const SizedBox(height: 12),
             SizedBox(
               width: double.infinity,
-              child: FilledButton.icon(
-                onPressed: _busy ? null : _apple,
-                icon: const Icon(Icons.apple),
-                label: const Text(
-                  'Continue with Apple',
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
+              child: _signedIn
+                  ? const SizedBox.shrink()
+                  : FilledButton.icon(
+                      onPressed: _busy ? null : _apple,
+                      icon: const Icon(Icons.apple),
+                      label: const Text(
+                        'Continue with Apple',
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
             ),
             const SizedBox(height: 12),
             // 👇 NEW: UI buttons (put inside your build method's widget tree, e.g., in a Column)
@@ -138,26 +171,30 @@ class _SignInScreenState extends State<SignInScreen> {
               runSpacing: 12,
               children: [
                 // Dev Sign-in
-                ElevatedButton(
-                  onPressed: () async {
-                    try {
-                      // 👇 Update: after successful sign-in, go to Home
-                      // navigate to home after login start
-                      await widget.api.signInDevAndFetch('rahul@example.com');
-                      final me = await widget.api.getMe();
-                      if (!context.mounted) return;
-                      Navigator.of(context)
-                          .pushNamedAndRemoveUntil('/home', (route) => false);
-                      // navigate to home after login end
-                    } catch (e) {
-                      if (!context.mounted) return;
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        SnackBar(content: Text('Dev sign-in failed: $e')),
-                      );
-                    }
-                  },
-                  child: const Text('Sign in (Dev)'),
-                ),
+                if (!_signedIn)
+                  ElevatedButton(
+                    onPressed: () async {
+                      try {
+                        await widget.api.signInDevAndFetch('rahul@example.com');
+                        final me = await widget.api.getMe();
+                        _currentEmail = me['email'] as String? ?? _currentEmail;
+                        _signedIn = true;
+                        if (!context.mounted) return;
+                        if (widget.autoRedirectHome) {
+                          Navigator.of(context)
+                              .pushNamedAndRemoveUntil('/home', (route) => false);
+                        } else {
+                          Navigator.of(context).pop(true);
+                        }
+                      } catch (e) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Dev sign-in failed: $e')),
+                        );
+                      }
+                    },
+                    child: const Text('Sign in (Dev)'),
+                  ),
 
                 // OPTIONAL: Google / Apple buttons (enable when providers ready)
                 // ElevatedButton(
@@ -179,19 +216,21 @@ class _SignInScreenState extends State<SignInScreen> {
                 //   child: const Text('Sign in with Apple'),
                 // ),
 
-                // Sign out
-                OutlinedButton(
-                  onPressed: () async {
-                    // 👇 Update: after sign-out, go to Sign-in
-                    // navigate to sign-in after logout start
-                    await widget.api.signOut();
-                    if (!context.mounted) return;
-                    Navigator.of(context)
-                        .pushNamedAndRemoveUntil('/sign-in', (route) => false);
-                    // navigate to sign-in after logout end
-                  },
-                  child: const Text('Sign out'),
-                ),
+                if (_signedIn)
+                  OutlinedButton(
+                    onPressed: () async {
+                      await widget.api.signOut();
+                      if (!context.mounted) return;
+                      setState(() {
+                        _signedIn = false;
+                        _currentEmail = null;
+                      });
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Signed out')),
+                      );
+                    },
+                    child: const Text('Sign out'),
+                  ),
               ],
             ),
             // signin actions end
@@ -201,9 +240,13 @@ class _SignInScreenState extends State<SignInScreen> {
             Padding(
               padding: const EdgeInsets.only(top: 12),
               child: Text(
-                _currentEmail == null
-                    ? (_restored ? 'Not signed in' : 'Restoring session…')
-                    : 'Signed in as: $_currentEmail',
+                !_restored
+                    ? 'Restoring session…'
+                    : _signedIn
+                        ? (_currentEmail == null
+                            ? 'Signed in'
+                            : 'Signed in as $_currentEmail')
+                        : 'Not signed in',
               ),
             ),
             // signin status end

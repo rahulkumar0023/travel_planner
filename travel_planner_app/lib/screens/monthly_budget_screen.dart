@@ -1,31 +1,28 @@
 import 'package:flutter/material.dart';
-import '../services/api_service.dart';
-// 👇 NEW: Monthly view-models for this screen
+
 import '../models/monthly.dart';
-import '../models/budget.dart'; // for BudgetKind
-// 👇 NEW: categories & monthly txns
-import '../models/monthly_category.dart';
-import '../models/monthly_txn.dart';
-import '../services/monthly_store.dart';
-import 'monthly/category_editor_sheet.dart';
-import 'monthly/txn_editor_sheet.dart';
-import 'category_manager_screen.dart';
-import 'sign_in_screen.dart';
+import '../services/api_service.dart';
+import '../services/trip_storage_service.dart';
+import 'monthly/monthly_budget_detail_screen.dart';
+import 'monthly/new_monthly_budget_screen.dart';
 
 class MonthlyBudgetScreen extends StatefulWidget {
-  final ApiService api;
   const MonthlyBudgetScreen({super.key, required this.api});
+
+  final ApiService api;
 
   @override
   State<MonthlyBudgetScreen> createState() => _MonthlyBudgetScreenState();
 }
 
 class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
+  final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
   late DateTime _month;
-  // 👇 NEW: change budgets list to EnvelopeVM
   Future<MonthlyBudgetSummary> _summaryFut =
       Future.value(MonthlyBudgetSummary(currency: '', totalBudgeted: 0, totalSpent: 0));
   Future<List<EnvelopeVM>> _budgetsFut = Future.value(<EnvelopeVM>[]);
+  MonthlyBudgetSummary? _cachedSummary;
+  List<EnvelopeVM> _cachedBudgets = const [];
 
   @override
   void initState() {
@@ -34,16 +31,28 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     () async {
       try {
         await widget.api.waitForToken();
-        if (mounted) setState(_load);
+        if (mounted) _load();
       } catch (_) {}
     }();
   }
 
-  // 👇 NEW: wire to the new ApiService methods
   void _load() {
-    _summaryFut = widget.api.fetchMonthlySummary(_month);
-    _budgetsFut = widget.api.fetchMonthlyEnvelopes(_month);
+    setState(() {
+      _summaryFut = widget.api.fetchMonthlySummary(_month);
+      _budgetsFut = widget.api.fetchMonthlyEnvelopes(_month);
+    });
+    _summaryFut.then((value) {
+      if (!mounted) return;
+      setState(() => _cachedSummary = value);
+    });
+    _budgetsFut.then((value) {
+      if (!mounted) return;
+      setState(() => _cachedBudgets = value);
+    });
   }
+
+  String get _monthLabel =>
+      '${_month.year}-${_month.month.toString().padLeft(2, '0')}';
 
   Future<void> _pickMonth() async {
     final picked = await showDatePicker(
@@ -59,264 +68,177 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
     }
   }
 
-  String _monthName(int m) =>
-      const ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'][m - 1];
-
-  // 👇 NEW: monthKey helper — place near other helpers
-  String get _monthKey =>
-      '${_month.year}-${_month.month.toString().padLeft(2, '0')}';
-
-  Future<void> _openAddMenu() async {
-    final choice = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.savings_outlined),
-              title: const Text('Add salary / income'),
-              onTap: () => Navigator.pop(context, 'add_income'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.remove_circle_outline),
-              title: const Text('Add expense'),
-              onTap: () => Navigator.pop(context, 'add_expense'),
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.category_outlined),
-              title: const Text('New income category'),
-              onTap: () => Navigator.pop(context, 'add_income_cat'),
-            ),
-            ListTile(
-              leading: const Icon(Icons.category_outlined),
-              title: const Text('New expense category'),
-              onTap: () => Navigator.pop(context, 'add_expense_cat'),
-            ),
-            const Divider(),
-            ListTile(
-              leading: const Icon(Icons.category_outlined),
-              title: const Text('Add monthly envelope'),
-              subtitle: Text('${_monthName(_month.month)} ${_month.year}'),
-              onTap: () => Navigator.pop(context, 'envelope'),
-            ),
-            const SizedBox(height: 8),
-          ],
+  Future<void> _openCreateBudget() async {
+    final created = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => NewMonthlyBudgetScreen(
+          api: widget.api,
+          initialMonth: _month,
         ),
       ),
     );
-    if (choice == 'envelope') {
-      await _createEnvelopeDialog();
-      if (!mounted) return;
-      setState(_load);
-    } else if (choice == 'add_income') {
-      await showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        builder: (_) => TxnEditorSheet(monthKey: _monthKey, type: 'income'),
-      );
-      if (mounted) setState(() {});
-    } else if (choice == 'add_expense') {
-      await showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        builder: (_) => TxnEditorSheet(monthKey: _monthKey, type: 'expense'),
-      );
-      if (mounted) setState(() {});
-    } else if (choice == 'add_income_cat') {
-      await showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        builder: (_) =>
-            CategoryEditorSheet(monthKey: _monthKey, type: 'income'),
-      );
-      if (mounted) setState(() {});
-    } else if (choice == 'add_expense_cat') {
-      await showModalBottomSheet(
-        context: context,
-        isScrollControlled: true,
-        builder: (_) =>
-            CategoryEditorSheet(monthKey: _monthKey, type: 'expense'),
-      );
-      if (mounted) setState(() {});
+    if (created == true) {
+      _load();
     }
   }
 
-  Future<void> _createEnvelopeDialog() async {
-    final name = TextEditingController();
-    final amount = TextEditingController();
-    final currency = TextEditingController(text: 'EUR');
+  void _openDetail(EnvelopeVM env, MonthlyBudgetSummary summary) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => MonthlyBudgetDetailScreen(
+          month: _month,
+          envelope: env,
+          summary: summary,
+          api: widget.api,
+        ),
+      ),
+    );
+  }
 
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('New Monthly Envelope'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
+  Drawer _buildDrawer() {
+    final summary = _cachedSummary;
+    final budgets = _cachedBudgets;
+    final currency = summary?.currency.isNotEmpty == true
+        ? summary!.currency
+        : TripStorageService.getHomeCurrency();
+
+    return Drawer(
+      child: SafeArea(
+        child: ListView(
+          padding: EdgeInsets.zero,
           children: [
-            TextField(controller: name, decoration: const InputDecoration(labelText: 'Name')),
-            const SizedBox(height: 8),
-            TextField(
-              controller: amount,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(labelText: 'Budgeted amount'),
+            DrawerHeader(
+              margin: EdgeInsets.zero,
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('Monthly planner',
+                      style: Theme.of(context).textTheme.titleLarge),
+                  const SizedBox(height: 4),
+                  Text('Month $_monthLabel',
+                      style: Theme.of(context).textTheme.bodyMedium),
+                  const Spacer(),
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(context);
+                      _openCreateBudget();
+                    },
+                    icon: const Icon(Icons.add),
+                    label: const Text('Create monthly budget'),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(height: 8),
-            TextField(
-              controller: currency,
-              textCapitalization: TextCapitalization.characters,
-              decoration: const InputDecoration(labelText: 'Currency (e.g. EUR)'),
+            const ListTile(
+              leading: Icon(Icons.history),
+              title: Text('Recents'),
+            ),
+            if (budgets.isEmpty)
+              const ListTile(
+                title: Text('No budgets yet'),
+                dense: true,
+              )
+            else
+              ...budgets.take(5).map(
+                (b) => ListTile(
+                  leading: const Icon(Icons.calendar_today_outlined),
+                  title: Text(b.name),
+                  subtitle: Text('${b.planned.toStringAsFixed(2)} ${b.currency}'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _openDetail(b, summary ??
+                        MonthlyBudgetSummary(
+                          currency: currency,
+                          totalBudgeted: 0,
+                          totalSpent: 0,
+                        ));
+                  },
+                ),
+              ),
+            const Divider(),
+            ListTile(
+              leading: const Icon(Icons.repeat),
+              title: const Text('Recurring transactions'),
+              onTap: () {},
+            ),
+            ListTile(
+              leading: const Icon(Icons.bar_chart_outlined),
+              title: const Text('Analytics & reports'),
+              onTap: () {},
             ),
           ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Create')),
-        ],
       ),
     );
-
-    if (ok != true) return;
-
-    // Perform async work OUTSIDE setState
-    try {
-      await widget.api.createBudget(
-        kind: BudgetKind.monthly,
-        currency: currency.text.trim().toUpperCase(),
-        amount: double.tryParse(amount.text.trim()) ?? 0,
-        year: _month.year,
-        month: _month.month,
-        name: name.text.trim().isEmpty ? null : name.text.trim(),
-      );
-      if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Envelope created')),
-      );
-    } catch (e) {
-      if (!mounted) return;
-      final msg = e.toString();
-      // If unauthorized, route user to Sign In and retry is manual.
-      if (msg.contains('Unauthorized') || msg.contains('401') || msg.contains('missing api_jwt')) {
-        final ok = await Navigator.of(context).push<bool>(
-          MaterialPageRoute(builder: (_) => SignInScreen(api: widget.api)),
-        );
-        if (ok == true) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Signed in. Please try again.')),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Sign in required to create.')),
-          );
-        }
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Could not create: $e')),
-        );
-      }
-    }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-        appBar: AppBar(
-          title: const Text('Monthly Budget'),
-          actions: [
-            // 👇 NEW: Manage categories action start
-            IconButton(
-              tooltip: 'Manage categories',
-              icon: const Icon(Icons.folder_open_outlined),
-              onPressed: () {
-                Navigator.of(context).push(
-                  MaterialPageRoute(builder: (_) => const CategoryManagerScreen()),
-                );
-              },
-            ),
-            // 👆 Manage categories action end
-            IconButton(
-              icon: const Icon(Icons.calendar_month_outlined),
-              tooltip: 'Pick month',
-              onPressed: _pickMonth,
-            ),
+      key: _scaffoldKey,
+      drawer: _buildDrawer(),
+      appBar: AppBar(
+        title: Text('Monthly Budgets ($_monthLabel)'),
+        leading: IconButton(
+          icon: const Icon(Icons.menu),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_month_outlined),
+            tooltip: 'Pick month',
+            onPressed: _pickMonth,
+          ),
         ],
       ),
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _openAddMenu,
-        icon: const Icon(Icons.add),
-        label: const Text('Add'),
+        onPressed: _openCreateBudget,
+        icon: const Icon(Icons.account_balance_wallet_outlined),
+        label: const Text('New Monthly Budget'),
       ),
       body: FutureBuilder(
         future: Future.wait([_summaryFut, _budgetsFut]),
-        builder: (context, snap) {
-          if (snap.connectionState != ConnectionState.done) {
+        builder: (context, snapshot) {
+          if (snapshot.connectionState != ConnectionState.done) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snap.hasError) {
-            return Center(child: Text('Failed to load: ${snap.error}'));
+          if (snapshot.hasError) {
+            return Center(child: Text('Failed to load: ${snapshot.error}'));
           }
-          // 👇 NEW: correct types
-          final summary = (snap.data as List)[0] as MonthlyBudgetSummary;
-          final envelopes = (snap.data as List)[1] as List<EnvelopeVM>;
 
-            // 👉 NEW: fetch categories & transactions for this month
-            final incomeCats = MonthlyStore.instance.categoriesFor(_monthKey, type: 'income', parentId: null);
-            final expenseCats = MonthlyStore.instance.categoriesFor(_monthKey, type: 'expense', parentId: null);
-            final txns = MonthlyStore.instance.txnsFor(_monthKey);
+          final data = snapshot.data as List;
+          final summary = data[0] as MonthlyBudgetSummary;
+          final budgets = data[1] as List<EnvelopeVM>;
+
+          if (budgets.isEmpty) {
+            return Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  Icon(Icons.account_balance_wallet_outlined, size: 48),
+                  SizedBox(height: 12),
+                  Text('No monthly budgets yet.'),
+                  SizedBox(height: 4),
+                  Text('Tap “New Monthly Budget” to create one.'),
+                ],
+              ),
+            );
+          }
 
           return ListView(
+            padding: const EdgeInsets.only(bottom: 96),
             children: [
               _SummaryCard(summary: summary),
-              const SizedBox(height: 8),
-              // 👇 NEW: show envelopes
-              ...envelopes.map((e) => _BudgetRow(env: e)).toList(),
-                // ===== MonthlyScreen: Categories & Txns — START =====
-                const SizedBox(height: 16),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      const SizedBox(height: 8),
-                      Text('Categories', style: Theme.of(context).textTheme.titleMedium),
-                      const SizedBox(height: 8),
-                      if (incomeCats.isNotEmpty)
-                        Text('Income', style: Theme.of(context).textTheme.labelLarge),
-                      for (final c in incomeCats)
-                        _CategoryTile(
-                            category: c,
-                            monthKey: _monthKey,
-                            sectionType: 'income'),
-                      const SizedBox(height: 8),
-                      if (expenseCats.isNotEmpty)
-                        Text('Expenses', style: Theme.of(context).textTheme.labelLarge),
-                      for (final c in expenseCats)
-                        _CategoryTile(
-                            category: c,
-                            monthKey: _monthKey,
-                            sectionType: 'expense'),
-                      const SizedBox(height: 16),
-                      Text('Recent transactions', style: Theme.of(context).textTheme.titleSmall),
-                      const SizedBox(height: 8),
-                      for (final t in txns.take(8))
-                        ListTile(
-                          dense: true,
-                          title: Text('${t.type == "income" ? "+" : "-"} ${t.amount.toStringAsFixed(2)} ${t.currency} • ${t.note.isEmpty ? "(no note)" : t.note}'),
-                          subtitle: Text('${t.date.toLocal()}'.split(' ').first),
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () async {
-                              await MonthlyStore.instance.deleteTxn(t.id);
-                              setState(() {});
-                            },
-                          ),
-                        ),
-                    ],
-                  ),
+              const SizedBox(height: 12),
+              for (final env in budgets)
+                _BudgetRow(
+                  env: env,
+                  onTap: () => _openDetail(env, summary),
                 ),
-                // ===== MonthlyScreen: Categories & Txns — END =====
             ],
           );
         },
@@ -326,14 +248,19 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
 }
 
 class _SummaryCard extends StatelessWidget {
-  final MonthlyBudgetSummary summary;
   const _SummaryCard({required this.summary});
+
+  final MonthlyBudgetSummary summary;
+
   @override
   Widget build(BuildContext context) {
-    final pct = summary.pctSpent;
     final cs = Theme.of(context).colorScheme;
+    final currency = summary.currency.isEmpty
+        ? TripStorageService.getHomeCurrency()
+        : summary.currency;
+    final pct = summary.pctSpent;
     return Container(
-      margin: const EdgeInsets.all(16),
+      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
         color: Theme.of(context).cardColor,
@@ -343,16 +270,44 @@ class _SummaryCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Left Over  ${summary.remaining.toStringAsFixed(2)} ${summary.currency}',
-              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+          Text(
+            'Left over  ${summary.remaining.toStringAsFixed(2)} $currency',
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
-          LinearProgressIndicator(value: pct, minHeight: 8),
-          const SizedBox(height: 8),
-          Text('Spent ${summary.totalSpent.toStringAsFixed(2)} / ${summary.totalBudgeted.toStringAsFixed(2)} ${summary.currency}'),
-          Text('Income (this month): ${summary.totalIncome.toStringAsFixed(2)} ${summary.currency}',
-              style: Theme.of(context).textTheme.bodySmall),
-          Text('Monthly expenses (manual): ${summary.totalMonthExpenses.toStringAsFixed(2)} ${summary.currency}',
-              style: Theme.of(context).textTheme.bodySmall),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: LinearProgressIndicator(value: pct, minHeight: 8),
+          ),
+          const SizedBox(height: 12),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Budgeted'),
+              Text('${summary.totalBudgeted.toStringAsFixed(2)} $currency'),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Spent'),
+              Text('${summary.totalSpent.toStringAsFixed(2)} $currency'),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Income'),
+              Text('${summary.totalIncome.toStringAsFixed(2)} $currency'),
+            ],
+          ),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text('Expenses'),
+              Text('${summary.totalMonthExpenses.toStringAsFixed(2)} $currency'),
+            ],
+          ),
         ],
       ),
     );
@@ -360,8 +315,11 @@ class _SummaryCard extends StatelessWidget {
 }
 
 class _BudgetRow extends StatelessWidget {
+  const _BudgetRow({required this.env, required this.onTap});
+
   final EnvelopeVM env;
-  const _BudgetRow({required this.env});
+  final VoidCallback onTap;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -374,133 +332,88 @@ class _BudgetRow extends StatelessWidget {
       cs.secondaryContainer,
     ];
     final color = colors[env.colorIndex % colors.length];
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+      child: Material(
         color: Theme.of(context).cardColor,
+        elevation: 1,
         borderRadius: BorderRadius.circular(16),
-        border: Border.all(color: cs.outlineVariant),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              _Circle(color: color, label: env.name.isNotEmpty ? env.name[0].toUpperCase() : '?'),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(16),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
                   children: [
-                    Text(env.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 2),
-                    Text('Spending  ${env.spent.toStringAsFixed(2)} ${env.currency}',
-                        style: Theme.of(context).textTheme.bodySmall),
+                    _Circle(color: color, label: env.name.isNotEmpty ? env.name[0].toUpperCase() : '?'),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(env.name, style: const TextStyle(fontWeight: FontWeight.w700)),
+                          const SizedBox(height: 2),
+                          Text('Spent ${env.spent.toStringAsFixed(2)} ${env.currency}',
+                              style: Theme.of(context).textTheme.bodySmall),
+                        ],
+                      ),
+                    ),
+                    const Icon(Icons.chevron_right),
                   ],
                 ),
+                const SizedBox(height: 10),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: LinearProgressIndicator(
+                    value: env.pct,
+                    minHeight: 10,
+                    color: color,
+                    backgroundColor: cs.surfaceContainerHighest,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        'Budget ${env.planned.toStringAsFixed(2)} ${env.currency}',
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ),
+                    Expanded(
+                      child: Text(
+                        'Remaining ${(env.planned - env.spent).clamp(0, double.infinity).toStringAsFixed(2)} ${env.currency}',
+                        textAlign: TextAlign.end,
+                        style: Theme.of(context).textTheme.labelSmall,
+                      ),
+                    ),
+                  ],
                 ),
               ],
-              ),
-          const SizedBox(height: 10),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: LinearProgressIndicator(
-              value: env.pct,
-              minHeight: 10,
-              color: color,
-              backgroundColor: cs.surfaceVariant,
             ),
           ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  'Actual Budgeted  ${env.planned.toStringAsFixed(2)} ${env.currency}',
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-              ),
-              Expanded(
-                child: Text(
-                  'Remaining to spend  ${(env.planned - env.spent).clamp(0, double.infinity).toStringAsFixed(2)} ${env.currency}',
-                  textAlign: TextAlign.end,
-                  style: Theme.of(context).textTheme.labelSmall,
-                ),
-              ),
-            ],
-          ),
-        ],
+        ),
       ),
     );
   }
 }
 
-  class _Circle extends StatelessWidget {
-    final Color color;
-    final String label;
+class _Circle extends StatelessWidget {
   const _Circle({required this.color, required this.label});
+
+  final Color color;
+  final String label;
+
   @override
   Widget build(BuildContext context) {
     return CircleAvatar(
       radius: 16,
       backgroundColor: color,
       child: Text(label, style: const TextStyle(color: Colors.white)),
-    );
-  }
-}
-
-class _CategoryTile extends StatelessWidget {
-  final MonthlyCategory category;
-  final String monthKey;
-  final String sectionType;
-
-  const _CategoryTile({
-    required this.category,
-    required this.monthKey,
-    required this.sectionType,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final subs = MonthlyStore.instance
-        .categoriesFor(monthKey, type: sectionType, parentId: category.id);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        ListTile(
-          dense: true,
-          title: Text(category.name),
-          leading: const Icon(Icons.folder_open),
-          trailing: IconButton(
-            icon: const Icon(Icons.add),
-            tooltip: 'Add sub-category',
-            onPressed: () async {
-              await showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                builder: (_) => CategoryEditorSheet(
-                    monthKey: monthKey, type: sectionType, parent: category),
-              );
-              (context as Element).markNeedsBuild();
-            },
-          ),
-        ),
-        if (subs.isNotEmpty)
-          Padding(
-            padding: const EdgeInsets.only(left: 24),
-            child: Column(
-              children: [
-                for (final s in subs)
-                  ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.subdirectory_arrow_right),
-                    title: Text(s.name),
-                  ),
-              ],
-            ),
-          ),
-      ],
     );
   }
 }

@@ -908,6 +908,11 @@ class _DashboardScreenState extends State<DashboardScreen>
 
     final spent = _totalSpent;
     final remaining = (t.initialBudget) - spent;
+    final hasBudgetData =
+        _tripBudgetObj != null || _linkedMonthlyObj != null || t.initialBudget > 0;
+    final hasNotesData = t.notes != null && t.notes!.trim().isNotEmpty;
+    final hasExpensesData = _expenses.isNotEmpty;
+    final showEmptyState = !hasBudgetData && !hasNotesData && !hasExpensesData;
 
     return Scaffold(
       appBar: AppBar(
@@ -1050,12 +1055,14 @@ class _DashboardScreenState extends State<DashboardScreen>
             : _addExpenseForm, // or _addExpenseQuick for quick test
         child: const Icon(Icons.add),
       ),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
-          if (_isArchivedTrip)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
+      body: showEmptyState
+          ? _buildEmptyTripState(context)
+          : ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                if (_isArchivedTrip)
+                  Padding(
+                    padding: const EdgeInsets.only(bottom: 12),
               child: Container(
                 padding: const EdgeInsets.all(12),
                 decoration: BoxDecoration(
@@ -1431,4 +1438,27 @@ class _DashboardScreenState extends State<DashboardScreen>
       ),
     );
   }
+}
+
+Widget _buildEmptyTripState(BuildContext context) {
+  return Center(
+    child: Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Icon(Icons.airplanemode_inactive,
+            size: 64, color: Theme.of(context).colorScheme.outline),
+        const SizedBox(height: 12),
+        Text(
+          'No trip budget or expenses yet.',
+          style: Theme.of(context).textTheme.titleMedium,
+        ),
+        const SizedBox(height: 8),
+        Text(
+          'Tap + to log an expense or head to Budgets to set a goal.',
+          textAlign: TextAlign.center,
+          style: Theme.of(context).textTheme.bodySmall,
+        ),
+      ],
+    ),
+  );
 }

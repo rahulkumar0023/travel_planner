@@ -7,6 +7,7 @@ import '../services/budgets_sync.dart';
 import '../services/archived_trips_store.dart';
 import '../services/outbox_service.dart';
 import 'monthly_budget_screen.dart';
+import 'sign_in_screen.dart';
 // budget detail import start
 import 'monthly/budget_detail_screen.dart';
 // budget detail import end
@@ -39,6 +40,7 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     () async {
       try {
         await widget.api.waitForToken();
+        if (!await _ensureSignedIn()) return;
         final fut = widget.api.fetchBudgetsOrCache();
         if (mounted) {
           setState(() {
@@ -54,6 +56,20 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
         }
       }
     }();
+  }
+
+  Future<bool> _ensureSignedIn({bool force = false}) async {
+    if (!force && widget.api.isSignedIn) return true;
+    if (force) {
+      await widget.api.signOut();
+    }
+    if (!mounted) return false;
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SignInScreen(api: widget.api, autoRedirectHome: false),
+      ),
+    );
+    return result == true && widget.api.isSignedIn;
   }
 
 // Budgets _refresh sync start
@@ -148,6 +164,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
     if (ok != true) return;
 
     try {
+      // 👇 NEW: ensure JWT is present before the call
+      await widget.api.waitForToken();
       await widget.api.createBudget(
         kind: BudgetKind.monthly,
         currency: currencyCtrl.text.trim().toUpperCase(),
@@ -186,32 +204,57 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
       context: context,
       builder: (ctx) => AlertDialog(
         title: const Text('New Trip Budget'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(controller: nameCtrl, decoration: const InputDecoration(labelText: 'Name (e.g. Krakow Trip)')),
-            const SizedBox(height: 8),
-            TextField(
-                controller: amountCtrl,
-                keyboardType: const TextInputType.numberWithOptions(decimal: true),
-                decoration: const InputDecoration(labelText: 'Amount')),
-            const SizedBox(height: 8),
-            TextField(
-                controller: currencyCtrl,
-                textCapitalization: TextCapitalization.characters,
-                decoration: const InputDecoration(labelText: 'Currency (ISO 4217)')),
-            const SizedBox(height: 12),
-            // NEW: attach to an existing trip (optional)
-            DropdownButtonFormField<String>(
-              value: selectedTripId,
-              decoration: const InputDecoration(labelText: 'Attach to trip (optional)'),
-              items: [
-                const DropdownMenuItem(value: '', child: Text('— none —')),
-                ...trips.map((t) => DropdownMenuItem(value: t.id, child: Text(t.name))),
+        content: StatefulBuilder(
+          builder: (ctx, setFieldState) {
+            String dropdownValue = selectedTripId;
+            final items = <DropdownMenuItem<String>>[
+              const DropdownMenuItem(value: '', child: Text('— none —')),
+            ];
+            final seen = <String>{};
+            for (final trip in trips) {
+              if (seen.add(trip.id)) {
+                items.add(
+                    DropdownMenuItem(value: trip.id, child: Text(trip.name)));
+              }
+            }
+            if (dropdownValue.isNotEmpty && !seen.contains(dropdownValue)) {
+              dropdownValue = '';
+            }
+
+            return Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                    controller: nameCtrl,
+                    decoration: const InputDecoration(
+                        labelText: 'Name (e.g. Krakow Trip)')),
+                const SizedBox(height: 8),
+                TextField(
+                    controller: amountCtrl,
+                    keyboardType:
+                        const TextInputType.numberWithOptions(decimal: true),
+                    decoration: const InputDecoration(labelText: 'Amount')),
+                const SizedBox(height: 8),
+                TextField(
+                    controller: currencyCtrl,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: const InputDecoration(
+                        labelText: 'Currency (ISO 4217)')),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  value: dropdownValue,
+                  decoration: const InputDecoration(
+                      labelText: 'Attach to trip (optional)'),
+                  items: items,
+                  onChanged: (v) {
+                    setFieldState(() {
+                      selectedTripId = v ?? '';
+                    });
+                  },
+                ),
               ],
-              onChanged: (v) => selectedTripId = v ?? '',
-            ),
-          ],
+            );
+          },
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -222,6 +265,8 @@ class _BudgetsScreenState extends State<BudgetsScreen> with TickerProviderStateM
 
     if (ok == true) {
       try {
+        // 👇 NEW: ensure JWT is present before the call
+        await widget.api.waitForToken();
         await widget.api.createBudget(
           kind: BudgetKind.trip,
           currency: currencyCtrl.text.trim().toUpperCase(),

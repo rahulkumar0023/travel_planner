@@ -19,10 +19,8 @@ import '../models/trip.dart';
 import 'local_budget_store.dart';
 import 'dart:async';
 import 'local_trip_store.dart';
-import 'package:collection/collection.dart';
 import '../models/monthly.dart';
 import 'trip_storage_service.dart';
-import 'fx_service.dart';
 import '../models/monthly_txn.dart';
 import './monthly_store.dart';
 
@@ -63,28 +61,32 @@ Duration? sessionRemaining() {
 // 👇 NEW: baseUrl that works on iOS/Android emulators & web
 // baseUrl start
 String get baseUrl {
-  if (kIsWeb) return 'http://192.168.0.39:8080';
+  if (kIsWeb) return 'http://192.168.0.8:8080';
   if (Platform.isAndroid)
     return 'http://10.0.2.2:8080'; // Android emulator → host Mac
-  return 'http://192.168.0.39:8080'; // iOS simulator / macOS
+  return 'http://192.168.0.8:8080'; // iOS simulator / macOS
 }
 // baseUrl end
 
 // 👇 UPDATE: store/clear JWT in secure storage whenever token changes
 // setAuthToken start
 String? _jwt;
+bool _signOutInProgress = false;
 void setAuthToken(String? token, {String? email, String? userId}) async {
   // cancel any previous timer
   _expiryTimer?.cancel();
   _sessionExpiry = null;
 
-  _jwt = token;
-  if (_jwt != null && _jwt!.isNotEmpty) {
-    debugPrint('[Api] setAuthToken -> ${_jwt!.substring(0, 16)}...');
+  final newToken = token;
+  _jwt = newToken;
+  if (newToken != null && newToken.isNotEmpty) {
+    _signOutInProgress = false;
+    final preview = newToken.length > 16 ? newToken.substring(0, 16) : newToken;
+    debugPrint('[Api] setAuthToken -> $preview...');
 
     // persist
     try {
-      await _secure.write(key: _kJwtKey, value: _jwt);
+      await _secure.write(key: _kJwtKey, value: newToken);
       if (email != null) await _secure.write(key: _kEmailKey, value: email);
       if (userId != null) await _secure.write(key: _kUserIdKey, value: userId);
     } catch (_) {}
@@ -92,12 +94,12 @@ void setAuthToken(String? token, {String? email, String? userId}) async {
     // backward-compatible: also mirror to SharedPreferences for existing callers
     try {
       final p = await SharedPreferences.getInstance();
-      await p.setString('api_jwt', _jwt!);
+      await p.setString('api_jwt', newToken);
       if (email != null) await p.setString('user_email', email);
     } catch (_) {}
 
     // decode exp and schedule auto-logout
-    final payload = _decodeJwtPayload(_jwt!);
+    final payload = _decodeJwtPayload(newToken);
     final exp = payload['exp'];
     if (exp is int) {
       _sessionExpiry =
@@ -107,7 +109,7 @@ void setAuthToken(String? token, {String? email, String? userId}) async {
       if (!delay.isNegative) {
         _expiryTimer = Timer(delay + const Duration(seconds: 1), () {
           debugPrint('[Auth] JWT expired — auto sign-out');
-          _onAuthFailed();
+          unawaited(_onAuthFailed());
         });
       }
     }
@@ -150,44 +152,79 @@ class _FxCache {
 }
 
 // --- Auth failure handler + HTTP guard ---
-void _onAuthFailed() {
+Future<void> _onAuthFailed() async {
   _expiryTimer?.cancel();
   _sessionExpiry = null;
+  _signOutInProgress = true;
   _jwt = null;
-  () async {
-    try {
-      await _secure.delete(key: _kJwtKey);
-      await _secure.delete(key: _kEmailKey);
-      await _secure.delete(key: _kUserIdKey);
-      final p = await SharedPreferences.getInstance();
-      await p.remove('api_jwt');
-      await p.remove('user_email');
-    } catch (_) {}
-    navToSignIn();
-  }();
+  try {
+    await _secure.delete(key: _kJwtKey);
+    await _secure.delete(key: _kEmailKey);
+    await _secure.delete(key: _kUserIdKey);
+    await _secure.deleteAll();
+  } catch (_) {}
+  try {
+    final p = await SharedPreferences.getInstance();
+    await p.remove('api_jwt');
+    await p.remove('user_email');
+  } catch (_) {}
+  navToSignIn();
 }
 
-void _guardAuthResponse(int statusCode) {
-  if (statusCode == 401) {
-    debugPrint('[Auth] 401 received — forcing sign-out');
-    _onAuthFailed();
+Future<bool> _guardAuthResponse(int statusCode,
+    {bool allowSignOut = true}) async {
+  if (statusCode != 401) return false;
+
+  final before = _jwt;
+  debugPrint('[Auth] 401 — attempting restoreSession before logout');
+  try {
+    final restored = await ApiService().restoreSession();
+    final current = _jwt;
+    final hasToken = current != null && current.isNotEmpty;
+    final changed = before == null ? hasToken : (current != before);
+
+    if (hasToken && changed) {
+      debugPrint('[Auth] token refreshed after 401 — will retry once');
+      return true;
+    }
+
+    if (!allowSignOut) {
+      debugPrint('[Auth] token unchanged after restore — sign-out suppressed');
+      return false;
+    }
+
+    debugPrint('[Auth] token unchanged/unavailable after restore — forcing sign-out');
+    await _onAuthFailed();
+  } catch (err) {
+    if (!allowSignOut) {
+      debugPrint('[Auth] restore attempt failed ($err) — sign-out suppressed');
+      return false;
+    }
+    debugPrint('[Auth] restore attempt failed ($err) — forcing sign-out');
+    await _onAuthFailed();
   }
+  return false;
 }
 
 Future<http.Response> _sendWithGuard(Future<http.Response> future) async {
   final res = await future;
-  _guardAuthResponse(res.statusCode);
+  await _guardAuthResponse(res.statusCode);
   return res;
 }
 
 class ApiService {
+  ApiService._internal();
+  static final ApiService _instance = ApiService._internal();
+  factory ApiService() => _instance;
+
   bool lastBudgetsFromCache = false;
   bool lastTripsFromCache = false;
 
+  String _fmtDate(DateTime d) =>
+      '${d.year.toString().padLeft(4, '0')}-${d.month.toString().padLeft(2, '0')}-${d.day.toString().padLeft(2, '0')}';
+
 // --- FX cache (1h TTL) ---
   final Map<String, _FxCache> _fx = {}; // key: 'FROM_TO'
-
-  ApiService();
 
   // 👇 NEW: safe URL joiner — replaces '$baseUrl/...'
   // _u join start
@@ -204,6 +241,23 @@ class ApiService {
     // Prefer in-memory token; if missing, attempt secure restore
     var token = _jwt;
     token ??= await _secure.read(key: _kJwtKey);
+    if (token == null || token.isEmpty) {
+      // Legacy mirror: some flows may have written to SharedPreferences only
+      try {
+        final p = await SharedPreferences.getInstance();
+        final legacy = p.getString('api_jwt');
+        if (legacy != null && legacy.isNotEmpty) {
+          token = legacy;
+          // keep memory in sync; also migrate into secure storage asynchronously
+          _jwt = token;
+          () async {
+            try {
+              await _secure.write(key: _kJwtKey, value: token);
+            } catch (_) {}
+          }();
+        }
+      } catch (_) {}
+    }
     if (token == null || token.isEmpty) {
       throw Exception('Not authenticated: missing auth token');
     }
@@ -234,7 +288,17 @@ class ApiService {
       // legacy mirror (in case some code still writes to SharedPreferences)
       try {
         final p = await SharedPreferences.getInstance();
-        if ((p.getString('api_jwt') ?? '').isNotEmpty) return;
+        final legacy = p.getString('api_jwt');
+        if (legacy != null && legacy.isNotEmpty) {
+          _jwt = legacy;
+          // migrate silently
+          () async {
+            try {
+              await _secure.write(key: _kJwtKey, value: legacy);
+            } catch (_) {}
+          }();
+          return;
+        }
       } catch (_) {}
       await Future.delayed(const Duration(milliseconds: 150));
     }
@@ -245,6 +309,53 @@ class ApiService {
 
   // expose headers for outbox
   Future<Map<String, String>> headers(bool json) => _authHeadersRequired();
+
+  // Waits until a trip with [id] appears in fetchTrips(), or until [timeout].
+  Future<bool> waitUntilTripExists(String id,
+      {Duration timeout = const Duration(seconds: 6)}) async {
+    final deadline = DateTime.now().add(timeout);
+    while (DateTime.now().isBefore(deadline)) {
+      try {
+        final trips = await fetchTrips();
+        if (trips.any((t) => t.id == id)) return true;
+      } catch (_) {
+        // ignore and retry (network hiccup)
+      }
+      await Future.delayed(const Duration(milliseconds: 150));
+    }
+    return false;
+  }
+
+  // Issue a GET and retry once after a 401/403 by attempting session restore.
+  Future<http.Response> _getWithAuthRetry(Uri uri) async {
+    var res = await http.get(uri, headers: await _authHeadersRequired());
+    if (res.statusCode == 401) {
+      final refreshed =
+          await _guardAuthResponse(res.statusCode, allowSignOut: false);
+      if (refreshed) {
+        res = await http.get(uri, headers: await _authHeadersRequired());
+      }
+    }
+    return res;
+  }
+
+  // 👇 NEW: POST with a single silent retry after 401
+  Future<http.Response> _postWithAuthRetry({
+    required Uri uri,
+    required Map<String, String> headers,
+    Object? body,
+  }) async {
+    var res = await http.post(uri, headers: headers, body: body);
+    if (res.statusCode == 401) {
+      final refreshed =
+          await _guardAuthResponse(res.statusCode, allowSignOut: false);
+      if (refreshed) {
+        res = await http.post(uri,
+            headers: await _authHeadersRequired(), body: body);
+      }
+    }
+    return res;
+  }
 
   // 👇 NEW: who am I — GET /auth/me to verify header + show user
   // getMe start
@@ -275,7 +386,7 @@ class ApiService {
       throw Exception('Auth failed: ${res.statusCode} ${res.body}');
     }
     final data = jsonDecode(res.body) as Map<String, dynamic>;
-    final jwt = data['jwt'] as String?;
+    final jwt = (data['jwt'] ?? data['token']) as String?;
     final email = data['email'] as String?;
     if (jwt != null) {
       setAuthToken(jwt, email: email);
@@ -299,18 +410,27 @@ class ApiService {
     }
   }
 
-  // Validate current token by calling /auth/me. Clears token if invalid.
+  // Validate current token by calling /auth/me.
+  // Only clear token on explicit 401/403; ignore other statuses (e.g., 404 when endpoint not present).
   Future<bool> validateToken() async {
     try {
       final url = Uri.parse(_u('auth/me'));
-      final res = await _sendWithGuard(
-          http.get(url, headers: await _authHeadersRequired()));
+      final res = await http.get(url, headers: await _authHeadersRequired());
       if (res.statusCode == 200) return true;
-    } catch (_) {
-      // fall through to clear
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        setAuthToken(null);
+        return false;
+      }
+      if (kDebugMode) {
+        debugPrint('[Auth] validateToken non-200 (${res.statusCode}); not clearing');
+      }
+      // Treat other codes as non-fatal (assume token might still be valid for other endpoints).
+      return true;
+    } catch (e) {
+      // Network errors or header assembly failures: do not clear token here.
+      if (kDebugMode) debugPrint('[Auth] validateToken error: $e');
+      return true;
     }
-    setAuthToken(null);
-    return false;
   }
 
   // 👇 NEW: dev login — POST /auth/dev and store jwt
@@ -337,10 +457,30 @@ class ApiService {
   // 👇 NEW: restore session on app launch
   // restoreSession start
   Future<bool> restoreSession() async {
-    final saved = await _secure.read(key: _kJwtKey);
+    if (_signOutInProgress) {
+      debugPrint('[Api] restoreSession skipped (sign-out in progress)');
+      return false;
+    }
+    // Prefer secure storage
+    var saved = await _secure.read(key: _kJwtKey);
+    // Fallback: migrate legacy SharedPreferences token
+    if (saved == null || saved.isEmpty) {
+      try {
+        final p = await SharedPreferences.getInstance();
+        final legacy = p.getString('api_jwt');
+        if (legacy != null && legacy.isNotEmpty) {
+          saved = legacy;
+          // Migrate into secure storage for future
+          try {
+            await _secure.write(key: _kJwtKey, value: legacy);
+          } catch (_) {}
+        }
+      } catch (_) {}
+    }
     if (saved != null && saved.isNotEmpty) {
       _jwt = saved;
-      debugPrint('[Api] restored token -> ${_jwt!.substring(0, 16)}...');
+      final preview = saved.length > 16 ? saved.substring(0, 16) : saved;
+      debugPrint('[Api] restored token -> $preview...');
       // schedule expiry after restore as well
       setAuthToken(_jwt);
       return true;
@@ -392,13 +532,29 @@ class ApiService {
   // Trips
   // -----------------------------
   Future<List<Trip>> fetchTrips() async {
-    final res = await _sendWithGuard(http.get(Uri.parse(_u('trips')),
-        headers: await _authHeadersRequired()));
-    if (res.statusCode == 200) {
-      final List data = jsonDecode(res.body);
-      return data.map((e) => Trip.fromJson(e)).toList();
+    // Prefer '/api/trips' to align with budgets endpoints; fall back to '/trips' then '/trip'.
+    final urls = <String>[
+      _u('api/trips'),
+      _u('trips'),
+      _u('trip'),
+    ];
+
+    Exception? lastErr;
+    for (final u in urls) {
+      try {
+        final res = await _getWithAuthRetry(Uri.parse(u));
+        if (res.statusCode == 200) {
+          final List data = jsonDecode(res.body);
+          return data.map((e) => Trip.fromJson(e)).toList();
+        }
+        if (res.statusCode != 404) {
+          lastErr = Exception('Failed to load trips @ $u (${res.statusCode})');
+        }
+      } catch (e) {
+        lastErr = Exception('Trips load error @ $u: $e');
+      }
     }
-    throw Exception('Failed to load trips (${res.statusCode})');
+    throw lastErr ?? Exception('Failed to load trips: no endpoint available');
   }
 
   Future<List<Trip>> fetchTripsOrCache(
@@ -416,16 +572,81 @@ class ApiService {
   }
 
   Future<Trip> createTrip(Trip t) async {
-    final res = await _sendWithGuard(http.post(
-      Uri.parse(_u('trips')),
-      headers: await _authHeadersRequired(),
-      body: jsonEncode(t.toJson()),
-    ));
-    if (res.statusCode == 200 || res.statusCode == 201) {
-      return Trip.fromJson(jsonDecode(res.body));
+    // Build a creation payload without client-supplied id/participants to
+    // avoid backend rejections. Keep optional fields if present.
+    final payload = <String, dynamic>{
+      'name': t.name,
+      'startDate': _fmtDate(t.startDate),
+      'endDate': _fmtDate(t.endDate),
+      'currency': t.currency,
+      'initialBudget': t.initialBudget,
+      if (t.spendCurrencies.isNotEmpty) 'spendCurrencies': t.spendCurrencies,
+      if (t.notes != null && t.notes!.trim().isNotEmpty) 'notes': t.notes,
+    };
+
+    // Try common REST variants; do not auto sign-out on 401 here — those can
+    // be caused by endpoint mismatch rather than an actually invalid session.
+    // Prefer the '/api' namespace first to align with budgets endpoints
+    final urls = <String>[
+      _u('api/trips'),
+      _u('trips'),
+      _u('trip'),
+    ];
+
+    Exception? lastErr;
+    http.Response? lastRes;
+    for (final u in urls) {
+      try {
+        if (kDebugMode) {
+          final preview = (_jwt == null || _jwt!.isEmpty)
+              ? '(none)'
+              : '${_jwt!.substring(0, _jwt!.length > 12 ? 12 : _jwt!.length)}...';
+          debugPrint('[Trips] POST $u with Authorization (prefix): $preview');
+        }
+        final res = await _postWithAuthRetry(
+          uri: Uri.parse(u),
+          headers: await _authHeadersRequired(),
+          body: jsonEncode(payload),
+        );
+
+        lastRes = res;
+        if (res.statusCode == 200 || res.statusCode == 201) {
+          if (res.body.isNotEmpty) {
+            final map = (jsonDecode(res.body) as Map).cast<String, dynamic>();
+            return Trip.fromJson(map);
+          }
+          // Success without body — synthesize from Location header if present
+          final loc = res.headers['location'];
+          final id = (loc != null && loc.trim().isNotEmpty)
+              ? loc.split('/').last
+              : DateTime.now().millisecondsSinceEpoch.toString();
+          return Trip(
+            id: id,
+            name: t.name,
+            startDate: t.startDate,
+            endDate: t.endDate,
+            currency: t.currency,
+            initialBudget: t.initialBudget,
+            participants: const [],
+            spendCurrencies: t.spendCurrencies,
+            notes: t.notes,
+          );
+        }
+
+        // keep trying alternates on 404; otherwise remember error
+        if (res.statusCode != 404) {
+          lastErr = Exception(
+              'Create trip failed @ $u: ${res.statusCode} ${res.body}');
+        }
+      } catch (e) {
+        lastErr = Exception('Create trip error @ $u: $e');
+      }
     }
-    // include body for easier debugging
-    throw Exception('Failed to create trip (${res.statusCode}) ${res.body}');
+    if (lastRes != null) {
+      throw Exception(
+          'Failed to create trip (${lastRes.statusCode}) ${lastRes.body}');
+    }
+    throw lastErr ?? Exception('Failed to create trip: no endpoint available');
   }
 
   /// Create a lightweight group trip with just a name + base currency.
@@ -450,11 +671,17 @@ class ApiService {
     http.Response? lastRes;
     for (final u in urls) {
       try {
-        final res = await _sendWithGuard(http.post(
-          Uri.parse(u),
+        if (kDebugMode) {
+          final preview = (_jwt == null || _jwt!.isEmpty)
+              ? '(none)'
+              : '${_jwt!.substring(0, _jwt!.length > 12 ? 12 : _jwt!.length)}...';
+          debugPrint('[Trips] POST $u (group) with Authorization (prefix): $preview');
+        }
+        final res = await _postWithAuthRetry(
+          uri: Uri.parse(u),
           headers: await _authHeadersRequired(),
           body: jsonEncode(payload),
-        ));
+        );
         lastRes = res;
         if (res.statusCode == 200 || res.statusCode == 201) {
           if (res.body.isNotEmpty) {
@@ -590,15 +817,24 @@ class ApiService {
   // Expenses
   // -----------------------------
   Future<List<Expense>> fetchExpenses(String tripId) async {
-    final res = await _sendWithGuard(http.get(
-      Uri.parse(_u('expenses/$tripId')),
-      headers: await _authHeadersRequired(),
-    ));
+    final uri = Uri.parse(_u('expenses/$tripId'));
+    final res = await _getWithAuthRetry(uri);
     if (res.statusCode == 200) {
       final List data = jsonDecode(res.body);
       return data.map((e) => Expense.fromJson(e)).toList();
     }
-    throw Exception('Failed to load expenses (${res.statusCode})');
+    if (res.statusCode == 401) {
+      throw Exception('Session expired — please sign in again.');
+    }
+    if (res.statusCode == 403) {
+      throw Exception(
+          'Access denied (403) — you no longer have permission to view this trip.');
+    }
+    if (res.statusCode == 404) {
+      throw Exception(
+          'Trip not found (404) — it may have been deleted or you were removed.');
+    }
+    throw Exception('Failed to load expenses (${res.statusCode}) ${res.body}');
   }
 
   Future<void> addExpense(Expense e) async {
@@ -864,11 +1100,11 @@ class ApiService {
 
     for (final url in endpoints) {
       try {
-        final res = await _sendWithGuard(http.post(
-          Uri.parse(url),
+        final res = await _postWithAuthRetry(
+          uri: Uri.parse(url),
           headers: await _authHeadersRequired(),
           body: jsonEncode(payload),
-        ));
+        );
 
         // Success with body
         if (res.statusCode == 200 || res.statusCode == 201) {
@@ -904,9 +1140,9 @@ class ApiService {
           return created;
         }
 
-        // On 401/403: clear token and stop trying other endpoints
+        // On 401/403: stop trying other endpoints, but do NOT clear token here.
+        // Some servers may return 401 for a wrong route; avoid nuking the session.
         if (res.statusCode == 401 || res.statusCode == 403) {
-          setAuthToken(null);
           lastError = Exception(
               'Unauthorized (${res.statusCode}). Please sign in again.');
           break;

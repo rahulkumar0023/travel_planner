@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:collection/collection.dart';
 // monthly_store imports start
 import 'package:hive/hive.dart';
 import '../models/monthly_txn.dart';
@@ -45,6 +44,40 @@ class MonthlyStore {
 
     // ⚠️ If you also keep categories in this store, keep your existing opens here too.
     // init setup end
+  }
+
+  Future<void> _persistCategories(String monthKey, List<MonthlyCategory> list) async {
+    _catCache[monthKey] = list;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _catKey(monthKey),
+      jsonEncode(list.map((e) => e.toJson()).toList()),
+    );
+  }
+
+  Future<void> _removeTxnsMatching(
+      String monthKey, bool Function(MonthlyTxn txn) predicate) async {
+    final list = await MonthlyStore.all(monthKey);
+    final kept = <MonthlyTxn>[];
+    final removed = <MonthlyTxn>[];
+    for (final txn in list) {
+      if (predicate(txn)) {
+        removed.add(txn);
+      } else {
+        kept.add(txn);
+      }
+    }
+    _txCache[monthKey] = kept;
+    final p = await SharedPreferences.getInstance();
+    await p.setString(
+      _txKey(monthKey),
+      jsonEncode(kept.map((e) => e.toJson()).toList()),
+    );
+    for (final txn in removed) {
+      if (_txn.containsKey(txn.id)) {
+        await _txn.delete(txn.id);
+      }
+    }
   }
 
   // ---------- Transactions ----------
@@ -156,15 +189,23 @@ class MonthlyStore {
       {String? type, String? parentId}) {
     final list = _catCache[monthKey] ?? <MonthlyCategory>[];
     if (parentId != null) {
-      final parent = list.firstWhereOrNull((c) => c.id == parentId);
-      if (parent == null) return <MonthlyCategory>[];
-      return parent.subs
+      MonthlyCategory? parent;
+      for (final c in list) {
+        if (c.id == parentId) {
+          parent = c;
+          break;
+        }
+      }
+      final parentCat = parent;
+      if (parentCat == null) return <MonthlyCategory>[];
+      return parentCat.subs
           .map((s) => MonthlyCategory(
                 id: s.id,
                 name: s.name,
-                kind: parent.kind,
+                kind: parentCat.kind,
                 subs: const [],
                 parentId: parentId,
+                planned: s.planned,
               ))
           .toList();
     }
@@ -177,6 +218,7 @@ class MonthlyStore {
     required String monthKey,
     required String name,
     required String type, // 'income' | 'expense'
+    double planned = 0,
     String? parentId,
   }) async {
     final list = await categories(monthKey);
@@ -189,16 +231,13 @@ class MonthlyStore {
             MonthlySubCategory(
               id: 'sub-\${DateTime.now().microsecondsSinceEpoch}',
               name: name.trim(),
-              planned: 0.0,
+              planned: planned,
             )
           ]);
         }
         return c;
       }).toList();
-      _catCache[monthKey] = next;
-      final p = await SharedPreferences.getInstance();
-      await p.setString(_catKey(monthKey),
-          jsonEncode(next.map((e) => e.toJson()).toList()));
+      await _persistCategories(monthKey, next);
       return;
     }
 
@@ -208,14 +247,55 @@ class MonthlyStore {
       kind: MonthlyKind.values.firstWhere((k) => k.name == type,
           orElse: () => MonthlyKind.expense),
       subs: const [],
+      planned: planned,
     );
     final next = [...list, cat];
-    _catCache[monthKey] = next;
-    final p = await SharedPreferences.getInstance();
-    await p.setString(
-      _catKey(monthKey),
-      jsonEncode(next.map((e) => e.toJson()).toList()),
-    );
+    await _persistCategories(monthKey, next);
+  }
+
+  Future<void> deleteCategory({
+    required String monthKey,
+    required String categoryId,
+    String? parentId,
+  }) async {
+    final list = await categories(monthKey);
+    if (parentId == null) {
+      MonthlyCategory? target;
+      for (final c in list) {
+        if (c.id == categoryId) {
+          target = c;
+          break;
+        }
+      }
+      if (target == null) return;
+      final subIds = target.subs.map((s) => s.id).toSet();
+      await _removeTxnsMatching(monthKey, (txn) {
+        if (txn.categoryId == categoryId) return true;
+        final subId = txn.subCategoryId;
+        return subId != null && subIds.contains(subId);
+      });
+      final next = list.where((c) => c.id != categoryId).toList();
+      await _persistCategories(monthKey, next);
+    } else {
+      MonthlyCategory? parent;
+      for (final c in list) {
+        if (c.id == parentId) {
+          parent = c;
+          break;
+        }
+      }
+      if (parent == null) return;
+      final next = list.map((c) {
+        if (c.id == parentId) {
+          final subs = c.subs.where((s) => s.id != categoryId).toList();
+          return c.copyWith(subs: subs);
+        }
+        return c;
+      }).toList();
+      await _removeTxnsMatching(
+          monthKey, (txn) => txn.subCategoryId == categoryId);
+      await _persistCategories(monthKey, next);
+    }
   }
 
   // cloneMonth start

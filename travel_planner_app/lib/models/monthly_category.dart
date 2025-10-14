@@ -8,7 +8,6 @@ class MonthlySubCategory {
   final String name;
   final double planned;
 
-
   // 👇 add here
   String get type {
     if (name.toLowerCase().contains('salary') ||
@@ -18,8 +17,11 @@ class MonthlySubCategory {
     return 'expense';
   }
 
-
-  MonthlySubCategory({required this.id, required this.name, this.planned = 0.0});
+  MonthlySubCategory({
+    required this.id,
+    required this.name,
+    this.planned = 0.0,
+  });
 
   factory MonthlySubCategory.fromJson(Map<String, dynamic> json) =>
       MonthlySubCategory(
@@ -47,6 +49,7 @@ class MonthlyCategory {
   final MonthlyKind kind;
   final List<MonthlySubCategory> subs;
   final String? parentId;
+  final double planned;
 
   MonthlyCategory({
     required this.id,
@@ -54,6 +57,7 @@ class MonthlyCategory {
     required this.kind,
     required this.subs,
     this.parentId,
+    this.planned = 0.0,
   });
 
   MonthlyCategory copyWith({
@@ -62,6 +66,7 @@ class MonthlyCategory {
     MonthlyKind? kind,
     List<MonthlySubCategory>? subs,
     String? parentId,
+    double? planned,
   }) =>
       MonthlyCategory(
         id: id ?? this.id,
@@ -69,6 +74,7 @@ class MonthlyCategory {
         kind: kind ?? this.kind,
         subs: subs ?? this.subs,
         parentId: parentId ?? this.parentId,
+        planned: planned ?? this.planned,
       );
 
   factory MonthlyCategory.fromJson(Map<String, dynamic> json) => MonthlyCategory(
@@ -83,6 +89,7 @@ class MonthlyCategory {
             .map((e) => MonthlySubCategory.fromJson(e as Map<String, dynamic>))
             .toList(),
         parentId: json['parentId'] as String?,
+        planned: (json['planned'] as num?)?.toDouble() ?? 0.0,
       );
 
   Map<String, dynamic> toJson() => {
@@ -91,6 +98,7 @@ class MonthlyCategory {
         'type': kind.name,
         'subs': subs.map((e) => e.toJson()).toList(),
         if (parentId != null) 'parentId': parentId,
+        if (planned != 0) 'planned': planned,
       };
 }
 

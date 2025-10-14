@@ -23,22 +23,26 @@ class CategoryEditorSheet extends StatefulWidget {
 
 class _CategoryEditorSheetState extends State<CategoryEditorSheet> {
   final _ctrl = TextEditingController();
+  final _amountCtrl = TextEditingController();
   bool _saving = false;
 
   @override
   void dispose() {
     _ctrl.dispose();
+    _amountCtrl.dispose();
     super.dispose();
   }
 
   Future<void> _save() async {
     if (_ctrl.text.trim().isEmpty) return;
     setState(() => _saving = true);
+    final planned = double.tryParse(_amountCtrl.text.replaceAll(',', '.')) ?? 0.0;
     await MonthlyStore.instance.addCategory(
       name: _ctrl.text,
       monthKey: widget.monthKey,
       type: widget.type,
       parentId: widget.parent?.id,
+      planned: planned,
     );
     if (mounted) Navigator.pop(context, true);
   }
@@ -60,6 +64,17 @@ class _CategoryEditorSheetState extends State<CategoryEditorSheet> {
               controller: _ctrl,
               decoration: const InputDecoration(labelText: 'Name'),
               autofocus: true,
+              onSubmitted: (_) => _save(),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _amountCtrl,
+              keyboardType:
+                  const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: 'Planned amount',
+                hintText: 'e.g. 2500',
+              ),
               onSubmitted: (_) => _save(),
             ),
             const SizedBox(height: 16),

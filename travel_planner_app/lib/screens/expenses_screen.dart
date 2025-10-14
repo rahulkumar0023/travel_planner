@@ -8,6 +8,7 @@ import '../models/trip.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
 import '../services/fx_service.dart';
+import 'sign_in_screen.dart';
 
 class ExpensesScreen extends StatefulWidget {
   final ApiService api;
@@ -37,41 +38,68 @@ class _ExpensesScreenState extends State<ExpensesScreen> {
   // quick access to active trip currency (safe)
   String get _tripCcy => _trip?.currency.toUpperCase() ?? 'EUR';
 
+  Future<bool> _ensureSignedIn({bool force = false}) async {
+    if (!force && widget.api.isSignedIn) return true;
+    if (force) {
+      await widget.api.signOut();
+    }
+    if (!mounted) return false;
+    final result = await Navigator.of(context).push<bool>(
+      MaterialPageRoute(
+        builder: (_) => SignInScreen(
+          api: widget.api,
+          autoRedirectHome: false,
+        ),
+      ),
+    );
+    if (result == true) {
+      _trip = TripStorageService.loadLightweight();
+      return widget.api.isSignedIn;
+    }
+    return false;
+  }
+
+  Future<List<Expense>> _loadExpensesFuture() async {
+    if (_trip == null) return <Expense>[];
+
+    await widget.api.waitForToken();
+    if (!await _ensureSignedIn()) {
+      throw Exception('Sign-in required to view expenses.');
+    }
+
+    Future<List<Expense>> fetch() async {
+      final list = await widget.api.fetchExpenses(_trip!.id);
+      _all = list;
+      return list;
+    }
+
+    try {
+      return await fetch();
+    } catch (err) {
+      final msg = err.toString();
+      if (msg.contains('Session expired')) {
+        if (await _ensureSignedIn(force: true)) {
+          await widget.api.waitForToken();
+          return await fetch();
+        }
+      }
+      rethrow;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
     _trip = TripStorageService.loadLightweight();
-    () async {
-      try {
-        await widget.api.waitForToken();
-        if (!mounted) return;
-        if (_trip == null) {
-          setState(() {
-            _future = Future.value(<Expense>[]);
-          });
-        } else {
-          final fut = widget.api.fetchExpenses(_trip!.id);
-          setState(() {
-            _future = fut;
-          });
-        }
-      } catch (e) {
-        if (mounted) {
-          setState(() {
-            _future = Future.error(e);
-          });
-        }
-      }
-    }();
+    _future = _loadExpensesFuture();
   }
 
   // refresh by re-fetching
   Future<void> _refresh() async {
-    if (_trip == null) return;
-    final list = await widget.api.fetchExpenses(_trip!.id);
     setState(() {
-      _future = Future.value(list);
+      _future = _loadExpensesFuture();
     });
+    await _future;
   }
 
   Future<void> _editExpense(Expense expense) async {

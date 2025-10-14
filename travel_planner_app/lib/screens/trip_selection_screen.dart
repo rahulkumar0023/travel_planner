@@ -95,6 +95,8 @@ Future<void> _ensureTripBudgetForTrip({
 
     if (!already && trip.initialBudget > 0) {
       // 2) Create & cache the Trip Budget so Home sees it right away
+      // 👇 NEW: ensure JWT is present before the call
+      await widget.api.waitForToken();
       final newBudget = await widget.api.createBudget(
         kind: BudgetKind.trip,
         currency: trip.currency,
@@ -215,22 +217,33 @@ Future<void> _ensureTripBudgetForTrip({
 
 // _createTripDialog auto-budget start
     if (created != null) {
-      final saved = await widget.api.createTrip(created);
+      try {
+        // Ensure the JWT is loaded before creating the trip
+        await widget.api.waitForToken();
+        final saved = await widget.api.createTrip(created);
+        // Wait until GET /trips lists this ID to avoid race with budget creation
+        await widget.api.waitUntilTripExists(saved.id);
 
-      // 👇 NEW: auto-create the Trip Budget for this Trip
-      // auto-create trip budget call start
-      await _ensureTripBudgetForTrip(trip: saved);
-      // auto-create trip budget call end
+        // 👇 NEW: auto-create the Trip Budget for this Trip
+        // auto-create trip budget call start
+        await _ensureTripBudgetForTrip(trip: saved);
+        // auto-create trip budget call end
 
-      // 👇 NEW: signal budgets changed (home card will refresh) start
-      BudgetsSync.instance.bump();
-      // 👇 NEW: signal budgets changed (home card will refresh) end
+        // 👇 NEW: signal budgets changed (home card will refresh) start
+        BudgetsSync.instance.bump();
+        // 👇 NEW: signal budgets changed (home card will refresh) end
 
-      await TripStorageService.save(saved);
-      if (mounted) {
-        await _refresh(); // refresh list after creation
+        await TripStorageService.save(saved);
+        if (mounted) {
+          await _refresh(); // refresh list after creation
+          if (!mounted) return;
+          Navigator.of(context).pop<Trip>(saved);
+        }
+      } catch (e) {
         if (!mounted) return;
-        Navigator.of(context).pop<Trip>(saved);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Create trip failed: $e')),
+        );
       }
     }
 // _createTripDialog auto-budget end
@@ -290,10 +303,14 @@ Future<void> _ensureTripBudgetForTrip({
     if (created == null) return;
 
     try {
+      // Ensure the JWT is loaded before creating the trip
+      await widget.api.waitForToken();
       final saved = await widget.api.createTripWithGroup(
         name: created.name,
         currency: created.currency,
       );
+      // Wait until GET /trips lists this ID
+      await widget.api.waitUntilTripExists(saved.id);
 
       await TripStorageService.save(saved);
       if (!mounted) return;
@@ -425,13 +442,15 @@ Future<void> _ensureTripBudgetForTrip({
                                   SnackBar(content: Text('Delete failed: $e')),
                                 );
                               }
-                            } else if (v == 'create_budget') {
-                              try {
-                                await widget.api.createBudget(
-                                  kind: BudgetKind.trip,
-                                  currency: t.currency,
-                                  amount: t.initialBudget,
-                                  tripId: t.id,
+                          } else if (v == 'create_budget') {
+                            try {
+                              // 👇 NEW: ensure JWT is present before the call
+                              await widget.api.waitForToken();
+                              await widget.api.createBudget(
+                                kind: BudgetKind.trip,
+                                currency: t.currency,
+                                amount: t.initialBudget,
+                                tripId: t.id,
                                   name: t.name,
                                 );
                                 if (!mounted) return;
