@@ -357,6 +357,46 @@ class ApiService {
     return res;
   }
 
+  String _extractErrorMessage(http.Response res) {
+    final body = res.body.trim();
+    if (body.isEmpty) return '';
+    try {
+      final decoded = jsonDecode(body);
+      if (decoded is Map) {
+        const keys = ['message', 'error', 'detail', 'title'];
+        for (final key in keys) {
+          final value = decoded[key];
+          if (value is String && value.trim().isNotEmpty) {
+            return value.trim();
+          }
+        }
+        final errors = decoded['errors'];
+        if (errors is List && errors.isNotEmpty) {
+          final first = errors.first;
+          if (first is String && first.trim().isNotEmpty) {
+            return first.trim();
+          }
+          if (first is Map) {
+            for (final value in first.values) {
+              if (value is String && value.trim().isNotEmpty) {
+                return value.trim();
+              }
+            }
+          }
+        }
+      }
+      if (decoded is List && decoded.isNotEmpty) {
+        final first = decoded.first;
+        if (first is String && first.trim().isNotEmpty) {
+          return first.trim();
+        }
+      }
+    } catch (_) {
+      // Ignore decode errors and fall back to raw body snippet.
+    }
+    return body.length > 160 ? '${body.substring(0, 160)}…' : body;
+  }
+
   // 👇 NEW: who am I — GET /auth/me to verify header + show user
   // getMe start
   Future<Map<String, dynamic>> getMe() async {
@@ -1097,6 +1137,7 @@ class ApiService {
     ];
 
     Exception? lastError;
+    Exception? lastNotFoundError;
 
     for (final url in endpoints) {
       try {
@@ -1148,11 +1189,20 @@ class ApiService {
           break;
         }
 
-        // If 404, try the next candidate; otherwise capture error and continue
-        if (res.statusCode != 404) {
-          lastError = Exception('Create budget failed @ $url: '
-              '${res.statusCode} ${res.body}');
+        if (res.statusCode == 404) {
+          if (kind == BudgetKind.trip && tripId != null) {
+            final msg = _extractErrorMessage(res);
+            final friendly = (msg.isNotEmpty && msg.toLowerCase() != 'not found')
+                ? msg
+                : 'Trip not found (404) — it may have been deleted or you were removed.';
+            lastNotFoundError = Exception(friendly);
+          }
+          continue;
         }
+
+        // If 404, try the next candidate; otherwise capture error and continue
+        lastError = Exception('Create budget failed @ $url: '
+            '${res.statusCode} ${res.body}');
       } catch (e) {
         lastError = Exception('Create budget error @ $url: $e');
       }
@@ -1160,6 +1210,7 @@ class ApiService {
 
     // If none of the candidates worked, throw the most relevant error
     throw lastError ??
+        lastNotFoundError ??
         Exception('Create budget failed: no budget endpoint available');
   }
 //create Budget end
