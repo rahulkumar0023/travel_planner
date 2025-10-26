@@ -233,7 +233,16 @@ Future<void> _ensureTripBudgetForTrip({
         BudgetsSync.instance.bump();
         // 👇 NEW: signal budgets changed (home card will refresh) end
 
+        // Save as active trip and update local trips cache so it appears even if GET fails
         await TripStorageService.save(saved);
+        try {
+          final cached = await LocalTripStore.load();
+          final exists = cached.any((t) => t.id == saved.id);
+          if (!exists) {
+            cached.add(saved);
+            await LocalTripStore.save(cached);
+          }
+        } catch (_) {}
         if (mounted) {
           await _refresh(); // refresh list after creation
           if (!mounted) return;
@@ -313,6 +322,14 @@ Future<void> _ensureTripBudgetForTrip({
       await widget.api.waitUntilTripExists(saved.id);
 
       await TripStorageService.save(saved);
+      // Ensure it shows up offline or if listing parse fails
+      try {
+        final cached = await LocalTripStore.load();
+        if (!cached.any((t) => t.id == saved.id)) {
+          cached.add(saved);
+          await LocalTripStore.save(cached);
+        }
+      } catch (_) {}
       if (!mounted) return;
 
       // Show ID, and share an invite link (plain text, no Uri)

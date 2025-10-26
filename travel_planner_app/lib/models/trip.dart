@@ -22,24 +22,53 @@ class Trip {
   });
 
   factory Trip.fromJson(Map<String, dynamic> j) => Trip(
-        id: j['id'] as String,
-        name: j['name'] as String,
-        startDate: DateTime.parse(j['startDate'] as String),
-        endDate: DateTime.parse(j['endDate'] as String),
-        currency: (j['currency'] as String).toUpperCase(),
-        initialBudget: (j['initialBudget'] as num).toDouble(),
-        participants: (j['participants'] as List).cast<String>(),
+        id: (j['id'] ?? j['tripId'] ?? j['uuid']).toString(),
+        name: (j['name'] ?? '').toString(),
+        startDate: _parseDate(j['startDate']) ?? DateTime.now(),
+        endDate: _parseDate(j['endDate']) ?? DateTime.now(),
+        currency: (j['currency']?.toString() ?? 'EUR').toUpperCase(),
+        initialBudget: _numToDouble(j['initialBudget']) ?? 0.0,
+        participants: _parseParticipants(j['participants']),
         spendCurrencies: (j['spendCurrencies'] as List? ?? const [])
-            .cast<String>()
-            .map((e) => e.toUpperCase())
+            .map((e) => e.toString().toUpperCase())
             .toList(),
         notes: () {
-          final raw = j['notes'] as String?;
+          final raw = j['notes']?.toString();
           if (raw == null) return null;
           final trimmed = raw.trim();
           return trimmed.isEmpty ? null : trimmed;
         }(),
       );
+
+  static DateTime? _parseDate(dynamic v) {
+    if (v == null) return null;
+    if (v is String && v.isNotEmpty) {
+      try { return DateTime.parse(v); } catch (_) {}
+    }
+    return null;
+  }
+
+  static double? _numToDouble(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    if (v is String) return double.tryParse(v);
+    return null;
+  }
+
+  static List<String> _parseParticipants(dynamic v) {
+    if (v == null) return const <String>[];
+    if (v is List) {
+      return v.map((e) {
+        if (e is String) return e;
+        if (e is Map) {
+          final m = e.cast<dynamic, dynamic>();
+          return (m['email'] ?? m['userId'] ?? m['id'] ?? '').toString();
+        }
+        return e.toString();
+      }).where((s) => s.isNotEmpty).toList();
+    }
+    return const <String>[];
+  }
 
   Map<String, dynamic> toJson() => {
         'id': id,

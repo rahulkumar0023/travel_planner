@@ -61,10 +61,10 @@ Duration? sessionRemaining() {
 // 👇 NEW: baseUrl that works on iOS/Android emulators & web
 // baseUrl start
 String get baseUrl {
-  if (kIsWeb) return 'http://192.168.0.8:8080';
+  if (kIsWeb) return 'http://192.168.64.1:8080';
   if (Platform.isAndroid)
     return 'http://10.0.2.2:8080'; // Android emulator → host Mac
-  return 'http://192.168.0.8:8080'; // iOS simulator / macOS
+  return 'http://192.168.64.1:8080'; // iOS simulator / macOS
 }
 // baseUrl end
 
@@ -193,7 +193,8 @@ Future<bool> _guardAuthResponse(int statusCode,
       return false;
     }
 
-    debugPrint('[Auth] token unchanged/unavailable after restore — forcing sign-out');
+    debugPrint(
+        '[Auth] token unchanged/unavailable after restore — forcing sign-out');
     await _onAuthFailed();
   } catch (err) {
     if (!allowSignOut) {
@@ -462,7 +463,8 @@ class ApiService {
         return false;
       }
       if (kDebugMode) {
-        debugPrint('[Auth] validateToken non-200 (${res.statusCode}); not clearing');
+        debugPrint(
+            '[Auth] validateToken non-200 (${res.statusCode}); not clearing');
       }
       // Treat other codes as non-fatal (assume token might still be valid for other endpoints).
       return true;
@@ -715,7 +717,8 @@ class ApiService {
           final preview = (_jwt == null || _jwt!.isEmpty)
               ? '(none)'
               : '${_jwt!.substring(0, _jwt!.length > 12 ? 12 : _jwt!.length)}...';
-          debugPrint('[Trips] POST $u (group) with Authorization (prefix): $preview');
+          debugPrint(
+              '[Trips] POST $u (group) with Authorization (prefix): $preview');
         }
         final res = await _postWithAuthRetry(
           uri: Uri.parse(u),
@@ -1141,8 +1144,21 @@ class ApiService {
 
     for (final url in endpoints) {
       try {
+        // Some backends expect tripId as a query parameter on trip-specific routes
+        // like '/api/budgets/trip'. Preserve body for JSON-first servers.
+        Uri uri = Uri.parse(url);
+        if (kind == BudgetKind.trip && tripId != null && tripId.isNotEmpty) {
+          final path = uri.path.toLowerCase();
+          if (path.endsWith('/budgets/trip') || path.endsWith('/budget/trip')) {
+            uri = uri.replace(queryParameters: {
+              ...uri.queryParameters,
+              'tripId': tripId,
+            });
+          }
+        }
+
         final res = await _postWithAuthRetry(
-          uri: Uri.parse(url),
+          uri: uri,
           headers: await _authHeadersRequired(),
           body: jsonEncode(payload),
         );
@@ -1192,7 +1208,8 @@ class ApiService {
         if (res.statusCode == 404) {
           if (kind == BudgetKind.trip && tripId != null) {
             final msg = _extractErrorMessage(res);
-            final friendly = (msg.isNotEmpty && msg.toLowerCase() != 'not found')
+            final friendly = (msg.isNotEmpty &&
+                    msg.toLowerCase() != 'not found')
                 ? msg
                 : 'Trip not found (404) — it may have been deleted or you were removed.';
             lastNotFoundError = Exception(friendly);
