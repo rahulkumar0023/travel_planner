@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/monthly.dart';
 import '../services/api_service.dart';
 import '../services/trip_storage_service.dart';
+import '../services/budgets_sync.dart';
 import 'monthly/monthly_budget_detail_screen.dart';
 import 'monthly/new_monthly_budget_screen.dart';
 
@@ -34,6 +35,13 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
         if (mounted) _load();
       } catch (_) {}
     }();
+    // Refresh when budgets or links change elsewhere in the app
+    BudgetsSync.instance.addListener(_onBudgetsChanged);
+  }
+
+  void _onBudgetsChanged() {
+    if (!mounted) return;
+    _load();
   }
 
   void _load() {
@@ -49,6 +57,12 @@ class _MonthlyBudgetScreenState extends State<MonthlyBudgetScreen> {
       if (!mounted) return;
       setState(() => _cachedBudgets = value);
     });
+  }
+
+  @override
+  void dispose() {
+    BudgetsSync.instance.removeListener(_onBudgetsChanged);
+    super.dispose();
   }
 
   String get _monthLabel =>

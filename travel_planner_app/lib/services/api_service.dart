@@ -1441,6 +1441,10 @@ class ApiService {
             b.month == mm.month)
         .toList();
 
+    // Load month-local transactions once (manual monthly income/expenses)
+    final key = monthKeyOf(mm);
+    final monthTxns = await MonthlyStore.all(key);
+
     // 2) for each monthly, find linked trip budgets
     final List<EnvelopeVM> out = [];
     int idx = 0;
@@ -1454,7 +1458,7 @@ class ApiService {
       final tripIds =
           linkedTripBudgets.map((t) => t.tripId).whereType<String>().toSet();
 
-      // 3) sum expenses for those trips within the month, convert each to monthly currency
+      // 3a) sum expenses for those trips within the month, convert each to monthly currency
       final start = _startOfMonth(mm).toUtc();
       final end = _endOfMonth(mm).toUtc();
       double spent = 0.0;
@@ -1481,6 +1485,23 @@ class ApiService {
             } catch (_) {
               spent += e.amount;
             } // safe fallback
+          }
+        }
+      }
+
+      // 3b) include manual monthly expenses for this month (converted to this monthly's currency)
+      for (final t in monthTxns) {
+        if (t.kind != MonthlyTxnKind.expense) continue;
+        final from = t.currency.toUpperCase();
+        final to = (m.currency.isEmpty ? monthlyCurrencyFallback : m.currency)
+            .toUpperCase();
+        if (from == to) {
+          spent += t.amount;
+        } else {
+          try {
+            spent += await convert(amount: t.amount, from: from, to: to);
+          } catch (_) {
+            spent += t.amount; // safe fallback
           }
         }
       }
@@ -1549,9 +1570,9 @@ class ApiService {
       }
     }
 
-    // Trip-linked spent is already inside fetchMonthlyEnvelopes() as env.spent
-    final tripLinkedSpent = envs.fold<double>(0.0, (p, e) => p + e.spent);
-    final totalSpent = tripLinkedSpent + monthExpenses;
+    // Envelope 'spent' now includes both trip-linked + manual monthly expenses.
+    // So totalSpent is the sum of env.spent; keep monthly-only totals separately.
+    final totalSpent = envs.fold<double>(0.0, (p, e) => p + e.spent);
 
     return MonthlyBudgetSummary(
       currency: ccy,
